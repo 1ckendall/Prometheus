@@ -141,51 +141,58 @@ class ProPepUI(QMainWindow):
             return
         self.statusBar().showMessage(f"Solver engine changed to {text}", 3000)
 
+    @staticmethod
+    def _safe_float(text: str, default: float = 0.0) -> float:
+        """Parse float text safely, returning a default for blank/invalid input."""
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _format_pressure(value: float) -> str:
+        """Format pressure values with fixed precision so decimals are preserved."""
+        return f"{value:.6f}"
+
     def change_units(self, system):
         if system == self.current_units:
             return
 
         # Access engine dock state
         ed = self.engine_dock
-        try:
-            pc = float(ed.input_pc.text())
-            pc_min = float(ed.input_pc_min.text())
-            pc_max = float(ed.input_pc_max.text())
-        except ValueError:
-            pc, pc_min, pc_max = 0.0, 0.0, 0.0
+        pc = self._safe_float(ed.input_pc.text())
+        pc_min = self._safe_float(ed.input_pc_min.text())
+        pc_max = self._safe_float(ed.input_pc_max.text())
 
         is_pressure = "Pressure" in ed.spec_combo.currentText()
-        try:
-            exp_val = float(ed.input_exp.text())
-        except ValueError:
-            exp_val = 0.0
-        try:
-            ambient_val = float(ed.input_ambient.text())
-        except ValueError:
-            ambient_val = 0.0
+        exp_val = self._safe_float(ed.input_exp.text())
+        ambient_val = self._safe_float(ed.input_ambient.text())
+
+        # Convert only when pressure units are changing; area-ratio input is unitless.
+        si_to_us = (self.current_units == "SI") and (system == "US")
+        us_to_si = (self.current_units == "US") and (system == "SI")
+
+        if si_to_us:
+            pressure_factor = 1e6 / 6894.757
+        elif us_to_si:
+            pressure_factor = 6894.757 / 1e6
+        else:
+            pressure_factor = 1.0
 
         if system == "SI":
-            ed.lbl_pc.setText("Chamber Pressure (MPa)")
-            ed.lbl_pc_bounds.setText("Pc Bounds (MPa):")
-            ed.input_pc.setText(f"{(pc * 6894.757) / 1e6:.6f}")
-            ed.input_pc_min.setText(f"{(pc_min * 6894.757) / 1e6:.6f}")
-            ed.input_pc_max.setText(f"{(pc_max * 6894.757) / 1e6:.6f}")
-            ed.lbl_amb.setText("Ambient Pressure (MPa)")
-            ed.input_ambient.setText(f"{(ambient_val * 6894.757) / 1e6:.6f}")
+            ed.input_pc.setText(self._format_pressure(pc * pressure_factor))
+            ed.input_pc_min.setText(self._format_pressure(pc_min * pressure_factor))
+            ed.input_pc_max.setText(self._format_pressure(pc_max * pressure_factor))
+            ed.input_ambient.setText(self._format_pressure(ambient_val * pressure_factor))
             if is_pressure:
-                ed.lbl_exp.setText("Exhaust Pressure (MPa)")
-                ed.input_exp.setText(f"{(exp_val * 6894.757) / 1e6:.6f}")
+                ed.input_exp.setText(self._format_pressure(exp_val * pressure_factor))
         elif system == "US":
-            ed.lbl_pc.setText("Chamber Pressure (PSI)")
-            ed.lbl_pc_bounds.setText("Pc Bounds (PSI):")
-            ed.input_pc.setText(f"{(pc * 1e6) / 6894.757:.2f}")
-            ed.input_pc_min.setText(f"{(pc_min * 1e6) / 6894.757:.2f}")
-            ed.input_pc_max.setText(f"{(pc_max * 1e6) / 6894.757:.2f}")
-            ed.lbl_amb.setText("Ambient Pressure (PSI)")
-            ed.input_ambient.setText(f"{(ambient_val * 1e6) / 6894.757:.2f}")
+            ed.input_pc.setText(self._format_pressure(pc * pressure_factor))
+            ed.input_pc_min.setText(self._format_pressure(pc_min * pressure_factor))
+            ed.input_pc_max.setText(self._format_pressure(pc_max * pressure_factor))
+            ed.input_ambient.setText(self._format_pressure(ambient_val * pressure_factor))
             if is_pressure:
-                ed.lbl_exp.setText("Exhaust Pressure (PSI)")
-                ed.input_exp.setText(f"{(exp_val * 1e6) / 6894.757:.2f}")
+                ed.input_exp.setText(self._format_pressure(exp_val * pressure_factor))
 
         self.current_units = system
         if hasattr(ed, "refresh_pressure_labels"):

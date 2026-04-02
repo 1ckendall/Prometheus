@@ -1,5 +1,5 @@
 from loguru import logger
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QLocale, Qt, QThread, Signal
 from PySide6.QtGui import QDoubleValidator, QIntValidator
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -108,6 +108,9 @@ class EngineDock(QDockWidget):
 
         self.double_validator = QDoubleValidator()
         self.double_validator.setNotation(QDoubleValidator.StandardNotation)
+        locale = QLocale(QLocale.English, QLocale.UnitedStates)
+        locale.setNumberOptions(QLocale.RejectGroupSeparator)
+        self.double_validator.setLocale(locale)
         self.int_validator = QIntValidator(2, 10000, self)
 
         dock_contents = QWidget()

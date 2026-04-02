@@ -1806,6 +1806,31 @@ class SpeciesDatabase:
     def __len__(self) -> int:
         return len(self.species)
 
+    def __getitem__(self, key: str) -> Species:
+        """Return a species by exact canonical key.
+
+        Args:
+            key: Canonical species ID, for example ``"H2O_G"``.
+
+        Returns:
+            Species mapped to the exact key.
+
+        Raises:
+            KeyError: If the exact key is not present.
+        """
+        return self.species[key]
+
+    def __contains__(self, key: str) -> bool:
+        """Return whether an exact canonical key exists in the database.
+
+        Args:
+            key: Canonical species ID, for example ``"H2O_G"``.
+
+        Returns:
+            ``True`` if the exact key exists, otherwise ``False``.
+        """
+        return key in self.species
+
     def load(
         self,
         include_nasa7: bool = True,

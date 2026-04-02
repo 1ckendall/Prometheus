@@ -283,6 +283,21 @@ def test_database_priority_override_prefers_janaf():
     assert deduped["H2O_G"] is sp_janaf
 
 
+def test_database_exact_key_dunder_lookup():
+    """__getitem__ and __contains__ should operate on exact canonical keys only."""
+    db = SpeciesDatabase("dummy", "dummy", "dummy")
+    sp_nasa9, _, _ = _build_overlap_species()
+    db.species = {"H2O_G": sp_nasa9}
+
+    assert "H2O_G" in db
+    assert db["H2O_G"] is sp_nasa9
+
+    assert "H2O" not in db
+    assert "h2o_g" not in db
+    with pytest.raises(KeyError):
+        _ = db["H2O"]
+
+
 def test_database_default_paths_are_populated():
     """SpeciesDatabase should populate built-in thermo file paths by default."""
     db = SpeciesDatabase()

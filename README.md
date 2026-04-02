@@ -67,8 +67,8 @@ from prometheus_equilibrium.equilibrium import (
 db = SpeciesDatabase()
 db.load(include_nasa9=True, include_nasa7=True, include_terra=True)
 
-h2 = db["H2_G"]
-o2 = db["O2_G"]
+h2 = db.find("H2", phase="G")
+o2 = db.find("O2", phase="G")
 products = db.get_species({"H", "O"}, max_atoms=6)
 
 T_react = 298.15
