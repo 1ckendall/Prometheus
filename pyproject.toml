@@ -1,0 +1,63 @@
+[project]
+name = "Prometheus"
+version = "0.0.1"
+description = "Combustion equilibrium solver for Python"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Charles Kendall"}
+]
+license = {text = "GPL-3.0-or-later"}
+keywords = ["combustion", "equilibrium", "thermodynamics", "rocket", "propellant", "CEA"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "loguru>=0.7.3",
+    "matplotlib>=3.10.8",
+    "numba>=0.64.0",
+    "numpy>=2.2.6",
+    "pyside6>=6.10.2",
+    "scipy>=1.15.3",
+    "thermochem>=0.9.0",
+]
+
+[project.urls]
+Repository = "https://github.com/1ckendall/Prometheus"
+"Bug Tracker" = "https://github.com/1ckendall/Prometheus/issues"
+
+[dependency-groups]
+dev = [
+    "black>=26.3.1",
+    "hatchling>=1.29.0",
+    "ipykernel>=7.2.0",
+    "isort>=8.0.1",
+    "optuna>=4.8.0",
+    "pyinstrument>=5.1.2",
+    "pytest>=9.0.2",
+    "rocketcea>=1.2.3",
+]
+docs = [
+    "sphinx>=7.0",
+    "renku-sphinx-theme",
+]
+
+[project.scripts]
+prometheus-build = "prometheus.tools.build_db:main"
+prometheus-build-all-thermo = "prometheus.tools.build_all_thermo:main"
+prometheus-build-legacy = "prometheus.tools.build_legacy_thermo:main"
+prometheus-build-propellants = "prometheus.tools.build_propellants:main"
+prometheus-gui = "prometheus.gui.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
