@@ -57,6 +57,10 @@ autodoc_default_options = {
     "show-inheritance": True,
 }
 autodoc_member_order = "bysource"
+
+# Mock heavy system-library imports so autodoc can run on ReadTheDocs without
+# Qt or Numba being installed.
+autodoc_mock_imports = ["PySide6", "numba"]
 # "description" mode moves typehints into the description body; combined with
 # dataclass __init__ auto-generation this caused duplicate object registrations.
 # "signature" keeps types in the function signature where they belong.

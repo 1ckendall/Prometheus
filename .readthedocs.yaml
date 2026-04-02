@@ -10,5 +10,8 @@ sphinx:
 
 python:
   install:
-    # Path to the file containing your doc dependencies
+    # Install the package itself so autodoc can import prometheus and its deps
+    - method: pip
+      path: .
+    # Doc-only dependencies (Sphinx theme etc.)
     - requirements: docs/requirements.txt
