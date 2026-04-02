@@ -1,0 +1,6 @@
+[submodule "pypropep"]
+	path = pypropep
+	url = https://github.com/jonnydyer/pypropep.git
+[submodule "cea"]
+	path = cea
+	url = https://github.com/nasa/cea.git

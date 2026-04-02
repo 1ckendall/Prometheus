@@ -1,0 +1,86 @@
+[project]
+name = "prometheus-equilibrium"
+dynamic = ["version"]
+description = "Combustion equilibrium solver for Python"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Charles Kendall"}
+]
+license = {text = "GPL-3.0-or-later"}
+keywords = ["combustion", "equilibrium", "thermodynamics", "rocket", "propellant", "CEA"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "loguru>=0.7",
+    "numpy>=2.0",
+    "numba>=0.60",
+    "scipy>=1.13",
+    "thermochem>=0.9",
+    "black[jupyter]>=26.3.1",
+]
+
+[project.optional-dependencies]
+gui = [
+    "pyside6>=6.6",
+    "matplotlib>=3.7",
+]
+
+[project.urls]
+Documentation = "https://prometheus-equilibrium.readthedocs.io/en/latest/"
+Repository = "https://github.com/1ckendall/Prometheus"
+"Bug Tracker" = "https://github.com/1ckendall/Prometheus/issues"
+
+[dependency-groups]
+dev = [
+    "black>=24.0",
+    "ipykernel>=6.0",
+    "isort>=5.0",
+    "pre-commit>=3.0",
+    "optuna>=3.0",
+    "pyinstrument>=4.0",
+    "pytest>=8.0",
+    "rocketcea>=1.2",
+]
+docs = [
+    "sphinx>=7.0",
+    "renku-sphinx-theme",
+]
+
+[project.scripts]
+prometheus-build = "prometheus_equilibrium.tools.build_db:main"
+prometheus-build-all-thermo = "prometheus_equilibrium.tools.build_all_thermo:main"
+prometheus-build-legacy = "prometheus_equilibrium.tools.build_legacy_thermo:main"
+prometheus-build-propellants = "prometheus_equilibrium.tools.build_propellants:main"
+prometheus-gui = "prometheus_equilibrium.gui.app:main"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+# Accept release tags like v1.2.3 or 1.2.3.
+tag_regex = "^(?:v)?(?P<version>.*)$"
+
+[tool.hatch.build.targets.wheel]
+packages = ["prometheus_equilibrium"]
+exclude = [
+    "prometheus_equilibrium/thermo_data/raw",
+    "prometheus_equilibrium/propellants/PEPCODED.DAF",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.isort]
+profile = "black"

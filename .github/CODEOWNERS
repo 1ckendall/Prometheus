@@ -1,0 +1,5 @@
+# Require explicit owner review for deployment and packaging surfaces.
+/.github/workflows/ @1ckendall
+/pyproject.toml @1ckendall
+/uv.lock @1ckendall
+

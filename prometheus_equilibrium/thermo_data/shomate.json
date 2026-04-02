@@ -1,0 +1,14 @@
+{
+  "_schema": {
+    "description": "NIST Shomate equation species database",
+    "coefficients_order": "[A, B, C, D, E, F, G, H] — NIST WebBook Shomate convention",
+    "units": "Cp in J/mol/K, H in kJ/mol, S in J/mol/K, T in K",
+    "formulas": {
+      "Cp": "A + Bt + Ct^2 + Dt^3 + E/t^2  [J/mol/K], t = T/1000",
+      "H":  "(At + Bt^2/2 + Ct^3/3 + Dt^4/4 - E/t + F) * 1000  [J/mol]",
+      "S":  "A*ln(t) + Bt + Ct^2/2 + Dt^3/3 - E/(2t^2) + G  [J/mol/K]"
+    },
+    "note_on_F": "F must satisfy: A*t298 + B*t298^2/2 + ... + F = delta_f_H298 [kJ/mol], where t298=0.29815. F is NOT the raw NIST table value; compute it as F = delta_f_H298 - (polynomial sum at t=0.29815).",
+    "adding_species": "1) Look up coefficients from https://webbook.nist.gov 2) Compute F so that H(298.15K) = delta_f_H298 [kJ/mol] 3) Verify Cp, H, S at 298.15 K against JANAF/NIST reference values"
+  }
+}
