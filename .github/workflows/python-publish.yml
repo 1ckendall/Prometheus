@@ -20,11 +20,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.12"
+
+      - name: Validate release tag format
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import sys
+
+          tag = os.environ["RELEASE_TAG"].strip()
+          if not re.fullmatch(r"v\d+\.\d+\.\d+(?:(a|b|rc)\d+)?", tag):
+              print(
+                  f"Invalid release tag '{tag}'. Expected vMAJOR.MINOR.PATCH "
+                  "(optionally with a/b/rc prerelease suffix)."
+              )
+              sys.exit(1)
+          PY
 
       - name: Build release distributions
         run: |

@@ -18,10 +18,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag || github.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -54,7 +53,20 @@ jobs:
                   "(optionally with a/b/rc prerelease suffix)."
               )
               sys.exit(1)
+
+          print(f"Using release tag: {tag}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as fh:
+              fh.write(f"RELEASE_TAG={tag}\n")
           PY
+
+      - name: Verify tag exists in repository
+        run: |
+          git fetch --force --tags
+          git rev-parse "refs/tags/${RELEASE_TAG}" >/dev/null
+
+      - name: Checkout release tag
+        run: |
+          git checkout --detach "refs/tags/${RELEASE_TAG}"
 
       - name: Build release distributions
         run: |
