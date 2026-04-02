@@ -18,11 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -59,14 +55,10 @@ jobs:
               fh.write(f"RELEASE_TAG={tag}\n")
           PY
 
-      - name: Verify tag exists in repository
-        run: |
-          git fetch --force --tags
-          git rev-parse "refs/tags/${RELEASE_TAG}" >/dev/null
-
-      - name: Checkout release tag
-        run: |
-          git checkout --detach "refs/tags/${RELEASE_TAG}"
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Build release distributions
         run: |
