@@ -1,6 +1,6 @@
 [project]
-name = "Prometheus"
-version = "0.0.1"
+name = "prometheus-equilibrium"
+dynamic = ["version"]
 description = "Combustion equilibrium solver for Python"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,29 +19,34 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-    "loguru>=0.7.3",
-    "matplotlib>=3.10.8",
-    "numba>=0.64.0",
-    "numpy>=2.2.6",
-    "pyside6>=6.10.2",
-    "scipy>=1.15.3",
-    "thermochem>=0.9.0",
+    "loguru>=0.7",
+    "numpy>=2.0",
+    "numba>=0.60",
+    "scipy>=1.13",
+    "thermochem>=0.9",
+]
+
+[project.optional-dependencies]
+gui = [
+    "pyside6>=6.6",
+    "matplotlib>=3.7",
 ]
 
 [project.urls]
+Documentation = "https://prometheus-equilibrium.readthedocs.io/en/latest/"
 Repository = "https://github.com/1ckendall/Prometheus"
 "Bug Tracker" = "https://github.com/1ckendall/Prometheus/issues"
 
 [dependency-groups]
 dev = [
-    "black>=26.3.1",
-    "hatchling>=1.29.0",
-    "ipykernel>=7.2.0",
-    "isort>=8.0.1",
-    "optuna>=4.8.0",
-    "pyinstrument>=5.1.2",
-    "pytest>=9.0.2",
-    "rocketcea>=1.2.3",
+    "black>=24.0",
+    "ipykernel>=6.0",
+    "isort>=5.0",
+    "pre-commit>=3.0",
+    "optuna>=3.0",
+    "pyinstrument>=4.0",
+    "pytest>=8.0",
+    "rocketcea>=1.2",
 ]
 docs = [
     "sphinx>=7.0",
@@ -49,15 +54,45 @@ docs = [
 ]
 
 [project.scripts]
-prometheus-build = "prometheus.tools.build_db:main"
-prometheus-build-all-thermo = "prometheus.tools.build_all_thermo:main"
-prometheus-build-legacy = "prometheus.tools.build_legacy_thermo:main"
-prometheus-build-propellants = "prometheus.tools.build_propellants:main"
-prometheus-gui = "prometheus.gui.app:main"
+prometheus-build = "prometheus_equilibrium.tools.build_db:main"
+prometheus-build-all-thermo = "prometheus_equilibrium.tools.build_all_thermo:main"
+prometheus-build-legacy = "prometheus_equilibrium.tools.build_legacy_thermo:main"
+prometheus-build-propellants = "prometheus_equilibrium.tools.build_propellants:main"
+prometheus-gui = "prometheus_equilibrium.gui.app:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+# Accept release tags like v1.2.3 or 1.2.3.
+tag_regex = "^(?:v)?(?P<version>.*)$"
+
+[tool.hatch.build.targets.wheel]
+packages = ["prometheus_equilibrium"]
+exclude = [
+    "prometheus_equilibrium/thermo_data/raw",
+    "prometheus_equilibrium/propellants/PEPCODED.DAF",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "prometheus_equilibrium",
+    "tests",
+    "README.md",
+    "LICENSE.txt",
+    "pyproject.toml",
+]
+exclude = [
+    "prometheus_equilibrium/thermo_data/raw",
+    "prometheus_equilibrium/propellants/PEPCODED.DAF",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.isort]
+profile = "black"
