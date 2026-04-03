@@ -88,7 +88,6 @@ class PerformanceWorker(QThread):
             area_ratio = self.exit_value if not self.is_pressure else None
             self.progress.emit(0, total, "Starting")
             for i, (sweep_value, problem) in enumerate(self.jobs, start=1):
-                self.progress.emit(i - 1, total, f"Case {i}/{total}")
                 pair = self.perf_solver.solve_pair(
                     problem,
                     pe_pa=pe_pa,
@@ -350,6 +349,16 @@ class EngineDock(QDockWidget):
             return value * _PA_PER_PSI
         return value * _PA_PER_MPA
 
+    @staticmethod
+    def _build_sweep_values(v_min: float, v_max: float, steps: int, axis: str) -> list[float]:
+        """Build exactly ``steps`` sweep values including both endpoints."""
+        if steps < 2:
+            raise ValueError(f"{axis} sweep steps must be >= 2.")
+        if v_max < v_min:
+            raise ValueError(f"{axis} sweep max must be >= min.")
+        step = (v_max - v_min) / (steps - 1)
+        return [v_min + i * step for i in range(steps)]
+
     def update_actual_of(self):
         # Forward to simulator page if needed, or update here
         pass
@@ -422,12 +431,7 @@ class EngineDock(QDockWidget):
                     of_min = float(sim_page.input_of_min.text())
                     of_max = float(sim_page.input_of_max.text())
                     of_steps = int(sim_page.input_of_steps.text())
-                    if of_steps < 2:
-                        raise ValueError("O/F sweep steps must be >= 2.")
-                    if of_max < of_min:
-                        raise ValueError("O/F sweep max must be >= min.")
-                    step = (of_max - of_min) / (of_steps - 1)
-                    of_values = [of_min + i * step for i in range(of_steps)]
+                    of_values = self._build_sweep_values(of_min, of_max, of_steps, "O/F")
                 else:
                     of_values = [sim_page.input_of_ratio.value()]
 
@@ -435,12 +439,7 @@ class EngineDock(QDockWidget):
                     pc_min = float(self.input_pc_min.text())
                     pc_max = float(self.input_pc_max.text())
                     pc_steps = int(self.input_pc_steps.text())
-                    if pc_steps < 2:
-                        raise ValueError("Pc sweep steps must be >= 2.")
-                    if pc_max < pc_min:
-                        raise ValueError("Pc sweep max must be >= min.")
-                    pc_step = (pc_max - pc_min) / (pc_steps - 1)
-                    pc_inputs = [pc_min + i * pc_step for i in range(pc_steps)]
+                    pc_inputs = self._build_sweep_values(pc_min, pc_max, pc_steps, "Pc")
                 else:
                     pc_inputs = [float(self.input_pc.text())]
 
@@ -531,12 +530,7 @@ class EngineDock(QDockWidget):
                     pc_min = float(self.input_pc_min.text())
                     pc_max = float(self.input_pc_max.text())
                     pc_steps = int(self.input_pc_steps.text())
-                    if pc_steps < 2:
-                        raise ValueError("Pc sweep steps must be >= 2.")
-                    if pc_max < pc_min:
-                        raise ValueError("Pc sweep max must be >= min.")
-                    pc_step = (pc_max - pc_min) / (pc_steps - 1)
-                    pc_inputs = [pc_min + i * pc_step for i in range(pc_steps)]
+                    pc_inputs = self._build_sweep_values(pc_min, pc_max, pc_steps, "Pc")
                     sweep_axis = "pc"
                 else:
                     pc_inputs = [float(self.input_pc.text())]

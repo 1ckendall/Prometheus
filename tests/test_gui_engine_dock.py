@@ -119,3 +119,11 @@ def test_on_perf_finished_error_payload_updates_gui(dock):
     text = dock.main_window.page_analysis.results_text.toPlainText()
     assert "Exit solve did not converge" in text
     assert "Traceback details" in text
+
+
+def test_build_sweep_values_uses_exact_step_count():
+    values = EngineDock._build_sweep_values(1.0, 6.0, 10, "O/F")
+    assert len(values) == 10
+    assert values[0] == pytest.approx(1.0)
+    assert values[-1] == pytest.approx(6.0)
+
