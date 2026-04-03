@@ -158,3 +158,103 @@ def test_set_from_log_moles(mixture_env):
 
     mix.set_from_log_moles(ln_n)
     np.testing.assert_allclose(mix.moles, [4.0, 5.0, 2.0])
+
+
+def test_from_dict():
+    """Mixture.from_dict constructs correctly from a species→moles mapping."""
+    gas1 = MockSpecies("G1", "G", molar_mass=0.002, cp=10.0, h=100.0, s=10.0)
+    gas2 = MockSpecies("G2", "G", molar_mass=0.004, cp=20.0, h=200.0, s=20.0)
+    mix = Mixture.from_dict({gas1: 1.5, gas2: 2.5})
+
+    assert mix.n_species == 2
+    assert mix.total_moles == pytest.approx(4.0)
+    assert mix.moles[0] == pytest.approx(1.5)
+    assert mix.moles[1] == pytest.approx(2.5)
+
+
+def test_from_dict_preserves_gas_ordering():
+    """from_dict must place gas species before condensed ones."""
+    gas = MockSpecies("G", "G", molar_mass=0.002, cp=10.0, h=100.0, s=10.0)
+    cond = MockSpecies("S", "S", molar_mass=0.050, cp=30.0, h=300.0, s=30.0)
+    mix = Mixture.from_dict({cond: 2.0, gas: 3.0})
+
+    assert mix.species[0].state == "G"
+    assert mix.species[1].state == "S"
+    assert mix.moles[0] == pytest.approx(3.0)
+    assert mix.moles[1] == pytest.approx(2.0)
+
+
+def test_gas_entropy_all_gas():
+    """gas_entropy should equal molar entropy for an all-gas mixture."""
+    gas1 = MockSpecies("G1", "G", molar_mass=0.002, cp=10.0, h=100.0, s=50.0)
+    gas2 = MockSpecies("G2", "G", molar_mass=0.004, cp=20.0, h=200.0, s=80.0)
+    mix = Mixture([gas1, gas2], np.array([2.0, 3.0]))
+    T = 1000.0
+
+    s_gas = mix.gas_entropy(T, P_REF)
+    s_mix = mix.entropy(T, P_REF)
+    # For an all-gas mixture gas_entropy and molar entropy differ by normalisation
+    # (gas_entropy is per mole of gas, entropy is per mole total; identical here)
+    assert s_gas == pytest.approx(s_mix, rel=1e-8)
+
+
+def test_gas_entropy_returns_zero_for_no_gas():
+    """gas_entropy returns 0 when there are no gas-phase species."""
+    cond = MockSpecies("C", "S", molar_mass=0.050, cp=30.0, h=500.0, s=50.0)
+    mix = Mixture([cond], np.array([1.0]))
+    assert mix.gas_entropy(1000.0, P_REF) == pytest.approx(0.0)
+
+
+def test_gibbs_equals_h_minus_ts(mixture_env):
+    """Gibbs = H - T*S for the mixture."""
+    mix, T = mixture_env["mix"], mixture_env["T"]
+    g = mix.gibbs(T, P_REF)
+    expected = mix.enthalpy(T) - T * mix.entropy(T, P_REF)
+    assert g == pytest.approx(expected, rel=1e-8)
+
+
+def test_condensed_species_property(mixture_env):
+    """condensed_species returns only the condensed species."""
+    mix = mixture_env["mix"]
+    condensed = mix.condensed_species
+    assert len(condensed) == 1
+    assert condensed[0].state == "S"
+
+
+def test_gas_species_property(mixture_env):
+    """gas_species returns only gas-phase species."""
+    mix = mixture_env["mix"]
+    gas = mix.gas_species
+    assert len(gas) == 2
+    assert all(sp.state == "G" for sp in gas)
+
+
+def test_constructor_length_mismatch():
+    """Mixture constructor raises ValueError when lengths differ."""
+    gas = MockSpecies("G", "G", molar_mass=0.002, cp=10.0, h=100.0, s=10.0)
+    with pytest.raises(ValueError, match="same length"):
+        Mixture([gas], np.array([1.0, 2.0]))
+
+
+def test_moles_setter_wrong_length(mixture_env):
+    """moles setter raises ValueError if shape changes."""
+    mix = mixture_env["mix"]
+    with pytest.raises(ValueError):
+        mix.moles = np.array([1.0, 2.0])  # wrong length (should be 3)
+
+
+def test_gas_moles_sum(mixture_env):
+    """total_gas_moles equals sum of gas-phase moles only."""
+    mix = mixture_env["mix"]
+    # gas moles: GasA=2.0, GasB=3.0, Solid=1.0
+    assert mix.total_gas_moles == pytest.approx(5.0)
+    gas_arr = mix.gas_moles()
+    assert float(gas_arr.sum()) == pytest.approx(5.0)
+
+
+def test_condensed_moles(mixture_env):
+    """condensed_moles returns only the condensed portion."""
+    mix = mixture_env["mix"]
+    cond_arr = mix.condensed_moles()
+    assert len(cond_arr) == 1
+    assert cond_arr[0] == pytest.approx(1.0)

@@ -10,7 +10,11 @@ from prometheus_equilibrium.core.constants import UNIVERSAL_GAS_CONSTANT as R
 from prometheus_equilibrium.equilibrium.element_matrix import ElementMatrix
 from prometheus_equilibrium.equilibrium.mixture import Mixture
 from prometheus_equilibrium.equilibrium.problem import EquilibriumProblem, ProblemType
-from prometheus_equilibrium.equilibrium.solver import MajorSpeciesSolver, PEPSolver
+from prometheus_equilibrium.equilibrium.solver import (
+    EquilibriumSolver,
+    MajorSpeciesSolver,
+    PEPSolver,
+)
 from prometheus_equilibrium.equilibrium.species import Species
 
 # ---------------------------------------------------------------------------
@@ -65,6 +69,21 @@ class _ConstGibbsCond(Species):
 
     def entropy(self, T: float) -> float:
         return 10.0
+
+
+class _WindowedConstGibbsGas(_ConstGibbsGas):
+    """Const-gibbs gas that is thermo-valid only inside [t_min, t_max]."""
+
+    def __init__(self, *args, t_min: float, t_max: float, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._t_min = float(t_min)
+        self._t_max = float(t_max)
+
+    def reduced_gibbs(self, T):
+        t_val = float(np.asarray(T))
+        if self._t_min <= t_val <= self._t_max:
+            return float(self._g0)
+        return float("nan")
 
 
 # ---------------------------------------------------------------------------
@@ -263,3 +282,203 @@ def test_equilibrium_constants_basis_species_are_zero():
         assert (
             abs(ln_K[j]) < 1e-10
         ), f"ln_K for basis species {j} should be 0, got {ln_K[j]}"
+
+
+# ---------------------------------------------------------------------------
+# 6. SP problem via _temperature_search
+# ---------------------------------------------------------------------------
+
+
+class _LogEntropyGas(Species):
+    """Ideal gas with Cp=const and S(T) ~ ln(T), needed for SP tests."""
+
+    def __init__(self, elements, cp_over_r, s_ref_over_r, molar_mass_kg=0.002):
+        super().__init__(elements=elements, state="G")
+        self._cp_r = float(cp_over_r)
+        self._s0_r = float(s_ref_over_r)
+        self._M = float(molar_mass_kg)
+
+    def molar_mass(self):
+        return self._M
+
+    def specific_heat_capacity(self, T):
+        return self._cp_r * R
+
+    def enthalpy(self, T):
+        return self._cp_r * R * float(T)
+
+    def entropy(self, T):
+        import math
+
+        return (self._cp_r * math.log(float(T)) + self._s0_r) * R
+
+
+def _make_hp_log_problem():
+    """HP problem using _LogEntropyGas species (needed for SP tests later)."""
+    sp_X = _LogEntropyGas(
+        {"X": 1}, cp_over_r=4.0, s_ref_over_r=2.0, molar_mass_kg=0.001
+    )
+    sp_X2 = _LogEntropyGas(
+        {"X": 2}, cp_over_r=5.0, s_ref_over_r=1.0, molar_mass_kg=0.002
+    )
+    T_ref = 1000.0
+    H0 = 1.0 * sp_X2.enthalpy(T_ref)
+    return (
+        EquilibriumProblem(
+            reactants={sp_X2: 1.0},
+            products=[sp_X, sp_X2],
+            problem_type=ProblemType.HP,
+            constraint1=H0,
+            constraint2=30 * P_REF,
+            t_init=T_ref,
+        ),
+        sp_X,
+        sp_X2,
+    )
+
+
+def test_sp_major_species_converges():
+    """MajorSpeciesSolver should converge on a SP problem."""
+    sp_X = _LogEntropyGas(
+        {"X": 1}, cp_over_r=4.0, s_ref_over_r=2.0, molar_mass_kg=0.001
+    )
+    sp_X2 = _LogEntropyGas(
+        {"X": 2}, cp_over_r=5.0, s_ref_over_r=1.0, molar_mass_kg=0.002
+    )
+
+    # First solve HP to get the chamber state
+    T_ref = 1000.0
+    H0 = 1.0 * sp_X2.enthalpy(T_ref)
+    hp_problem = EquilibriumProblem(
+        reactants={sp_X2: 1.0},
+        products=[sp_X, sp_X2],
+        problem_type=ProblemType.HP,
+        constraint1=H0,
+        constraint2=30 * P_REF,
+        t_init=T_ref,
+    )
+    chamber = MajorSpeciesSolver().solve(hp_problem)
+    assert chamber.converged, f"HP chamber solve failed: {chamber.failure_reason}"
+
+    # Then solve SP to lower pressure (nozzle expansion)
+    from prometheus_equilibrium.equilibrium.mixture import Mixture as _Mixture
+
+    S_chamber = chamber.mixture.total_entropy(chamber.temperature, chamber.pressure)
+    sp_problem = EquilibriumProblem(
+        reactants={
+            sp: n
+            for sp, n in zip(chamber.mixture.species, chamber.mixture.moles)
+            if n > 0
+        },
+        products=[sp_X, sp_X2],
+        problem_type=ProblemType.SP,
+        constraint1=S_chamber,
+        constraint2=P_REF,
+        t_init=chamber.temperature * 0.7,
+    )
+    sol = MajorSpeciesSolver().solve(sp_problem)
+    assert sol.converged, f"SP solve failed: {sol.failure_reason}"
+    # Isentropic expansion should cool the gas
+    assert sol.temperature < chamber.temperature
+
+
+def test_sp_pep_converges():
+    """PEPSolver should converge on a SP problem."""
+    sp_X = _LogEntropyGas(
+        {"X": 1}, cp_over_r=4.0, s_ref_over_r=2.0, molar_mass_kg=0.001
+    )
+    sp_X2 = _LogEntropyGas(
+        {"X": 2}, cp_over_r=5.0, s_ref_over_r=1.0, molar_mass_kg=0.002
+    )
+
+    T_ref = 1000.0
+    H0 = 1.0 * sp_X2.enthalpy(T_ref)
+    hp_problem = EquilibriumProblem(
+        reactants={sp_X2: 1.0},
+        products=[sp_X, sp_X2],
+        problem_type=ProblemType.HP,
+        constraint1=H0,
+        constraint2=30 * P_REF,
+        t_init=T_ref,
+    )
+    chamber = PEPSolver(max_iterations=300).solve(hp_problem)
+    assert chamber.converged, f"HP chamber solve failed"
+
+    S_chamber = chamber.mixture.total_entropy(chamber.temperature, chamber.pressure)
+    sp_problem = EquilibriumProblem(
+        reactants={
+            sp: n
+            for sp, n in zip(chamber.mixture.species, chamber.mixture.moles)
+            if n > 0
+        },
+        products=[sp_X, sp_X2],
+        problem_type=ProblemType.SP,
+        constraint1=S_chamber,
+        constraint2=P_REF,
+        t_init=chamber.temperature * 0.7,
+    )
+    sol = PEPSolver(max_iterations=300).solve(sp_problem)
+    assert sol.converged, f"SP solve failed: {sol.failure_reason}"
+    assert sol.temperature < chamber.temperature
+
+
+def test_refresh_thermo_species_set_drops_and_reintroduces_species():
+    """Thermo refresh should remove invalid species and re-add newly valid ones."""
+    sp_hot = _WindowedConstGibbsGas(
+        {"X": 1},
+        g0_RT=1.0,
+        h0_RT=2.0,
+        molar_mass_kg=0.001,
+        t_min=2000.0,
+        t_max=6000.0,
+    )
+    sp_cool = _WindowedConstGibbsGas(
+        {"X": 1},
+        g0_RT=1.5,
+        h0_RT=2.5,
+        molar_mass_kg=0.001,
+        t_min=200.0,
+        t_max=1500.0,
+    )
+    species_pool = [sp_hot, sp_cool]
+    active_elements = ["X"]
+
+    mix0 = Mixture([sp_hot], np.array([1.0]))
+
+    mix_hot, _ = EquilibriumSolver._refresh_thermo_species_set(
+        mix0, species_pool, active_elements, T=3000.0
+    )
+    assert mix_hot.species == [sp_hot]
+    assert mix_hot.moles[0] == pytest.approx(1.0)
+
+    mix_cool, _ = EquilibriumSolver._refresh_thermo_species_set(
+        mix_hot, species_pool, active_elements, T=1000.0
+    )
+    assert mix_cool.species == [sp_cool]
+    # Newly valid species are reintroduced at zero and then seeded to tiny positive gas moles.
+    assert mix_cool.moles[0] > 0.0
+
+
+# ---------------------------------------------------------------------------
+# 7. guess parameter
+# ---------------------------------------------------------------------------
+
+
+def test_guess_accepted_major_species(x_x2_problem):
+    """MajorSpeciesSolver should accept and use a guess mixture."""
+    # Solve once to get a good starting guess
+    sol1 = MajorSpeciesSolver().solve(x_x2_problem)
+    assert sol1.converged
+
+    # Solve again with the converged mixture as a guess — should converge faster
+    sol2 = MajorSpeciesSolver().solve(x_x2_problem, guess=sol1.mixture)
+    assert sol2.converged
+
+
+def test_guess_accepted_pep(x_x2_problem):
+    """PEPSolver should accept and use a guess mixture."""
+    sol1 = PEPSolver(max_iterations=300).solve(x_x2_problem)
+    assert sol1.converged
+
+    sol2 = PEPSolver(max_iterations=300).solve(x_x2_problem, guess=sol1.mixture)
+    assert sol2.converged

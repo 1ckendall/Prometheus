@@ -13,6 +13,7 @@ NASA CEA / RocketCEA.
 
    thermo/index
    solver_comparison
+   frozen_expansion
 
 .. toctree::
    :maxdepth: 2

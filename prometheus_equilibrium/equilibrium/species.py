@@ -1781,6 +1781,41 @@ class SpeciesDatabase:
         """
         self._source_priority_map = self._build_priority_map(source_priority)
 
+    @staticmethod
+    def _normalise_id_token(text: Optional[str]) -> str:
+        """Return an uppercase ASCII-ish token safe for canonical IDs."""
+        if not text:
+            return ""
+        import re as _re
+
+        token = _re.sub(r"[^A-Za-z0-9]+", "_", str(text).strip().upper())
+        return token.strip("_")
+
+    def _condensed_variant_tag(self, sp: Species) -> str:
+        """Build a stable variant tag for condensed species dedup keys/IDs."""
+        alias = self._normalise_id_token(getattr(sp, "alias", None))
+        phase = self._normalise_id_token(getattr(sp, "phase", None))
+        src = self._normalise_id_token(
+            getattr(sp, "source_attribution", None) or sp.source
+        )
+        return alias or phase or src or "VAR"
+
+    def _dedupe_identity(self, sp: Species) -> tuple:
+        """Return identity tuple used for cross-source deduplication."""
+        base = (tuple(sorted(sp.elements.items())), sp.state)
+        if sp.condensed != 0:
+            return base + (self._condensed_variant_tag(sp),)
+        return base
+
+    def _canonical_species_id(self, sp: Species) -> str:
+        """Return canonical species key used by ``self.species``."""
+        base = f"{sp.formula}_{sp.state}"
+        if sp.condensed != 0:
+            tag = self._condensed_variant_tag(sp)
+            if tag:
+                return f"{base}__{tag}"
+        return base
+
     def __repr__(self) -> str:
         status = (
             f"{len(self._all_species)} total entries"
@@ -1870,19 +1905,21 @@ class SpeciesDatabase:
             len(self.species),
         )
 
+    @staticmethod
+    def _t_range(sp: Species) -> float:
+        """Return the temperature range [K] covered by *sp*'s polynomial data."""
+        if isinstance(sp, (NASANineCoeff, ShomateCoeff)):
+            return sp.temperatures[-1] - sp.temperatures[0]
+        if isinstance(sp, NASASevenCoeff):
+            return sp.T_high - sp.T_low
+        try:
+            t = sp._JANAF__temperature  # type: ignore
+            return float(t[-1] - t[0])
+        except AttributeError:
+            return 0.0
+
     def _deduplicate(self, species_list: List[Species]) -> Dict[str, Species]:
         """Deduplicate a list of species based on priority and temperature range."""
-
-        def _t_range(sp: Species) -> float:
-            if isinstance(sp, (NASANineCoeff, ShomateCoeff)):
-                return sp.temperatures[-1] - sp.temperatures[0]
-            if isinstance(sp, NASASevenCoeff):
-                return sp.T_high - sp.T_low
-            try:
-                t = sp._JANAF__temperature  # type: ignore
-                return float(t[-1] - t[0])
-            except AttributeError:
-                return 0.0
 
         def _priority(sp: Species) -> int:
             """Priority for deduplication. Higher is better."""
@@ -1890,20 +1927,28 @@ class SpeciesDatabase:
 
         best: Dict[tuple, Species] = {}
         for sp in species_list:
-            key = (tuple(sorted(sp.elements.items())), sp.state)
+            key = self._dedupe_identity(sp)
             existing = best.get(key)
             if existing is None:
                 best[key] = sp
             else:
                 # Prefer higher source priority, then wider T range
-                if (_priority(sp), _t_range(sp)) > (
+                if (_priority(sp), self._t_range(sp)) > (
                     _priority(existing),
-                    _t_range(existing),
+                    self._t_range(existing),
                 ):
                     best[key] = sp
 
-        # Return dict keyed by canonical ID (e.g. H2O_G)
-        return {f"{sp.formula}_{sp.state}": sp for sp in best.values()}
+        deduped: Dict[str, Species] = {}
+        for sp in best.values():
+            key = self._canonical_species_id(sp)
+            if key in deduped:
+                suffix = 2
+                while f"{key}__{suffix}" in deduped:
+                    suffix += 1
+                key = f"{key}__{suffix}"
+            deduped[key] = sp
+        return deduped
 
     def get_species(
         self,
@@ -1961,17 +2006,30 @@ class SpeciesDatabase:
         if not self._all_species:
             raise RuntimeError("No species loaded.")
 
+        def _rank(sp: Species) -> tuple:
+            return (self._source_priority_map.get(sp.source, 0), self._t_range(sp))
+
         phase_up = phase.upper()
         canonical = f"{formula}_{phase_up}"
-        if canonical in self.species:
-            return self.species[canonical]
+        direct_matches = [
+            sp
+            for key, sp in self.species.items()
+            if key == canonical or key.startswith(f"{canonical}__")
+        ]
+        if direct_matches:
+            return max(direct_matches, key=_rank)
 
         # Hill-normalised canonical ID.
         hill = self._hill_from_string(formula)
         if hill and hill != formula:
             hill_id = f"{hill}_{phase_up}"
-            if hill_id in self.species:
-                return self.species[hill_id]
+            hill_matches = [
+                sp
+                for key, sp in self.species.items()
+                if key == hill_id or key.startswith(f"{hill_id}__")
+            ]
+            if hill_matches:
+                return max(hill_matches, key=_rank)
 
         # Alias/Full search
         formula_norm = formula.lstrip("*").upper()
@@ -1989,11 +2047,13 @@ class SpeciesDatabase:
         # Deduplicate candidates to pick the best one
         best_of_match = self._deduplicate(candidates)
         # Try to find the one with the right phase
-        for sp in best_of_match.values():
-            if sp.state.upper() == phase_up:
-                return sp
+        phase_matches = [
+            sp for sp in best_of_match.values() if sp.state.upper() == phase_up
+        ]
+        if phase_matches:
+            return max(phase_matches, key=_rank)
 
-        return list(best_of_match.values())[0]
+        return max(best_of_match.values(), key=_rank)
 
     @staticmethod
     def _hill_from_string(formula: str) -> Optional[str]:
@@ -2030,16 +2090,55 @@ class SpeciesDatabase:
             return "L"
         return "S"
 
+    def condensed_phase_partner(self, species: Species, T: float) -> Optional[Species]:
+        """Return the best condensed-phase partner for *species* valid at *T*.
+
+        Searches all loaded condensed species with the same element composition
+        as *species* for one whose Cp polynomial evaluates to a finite positive
+        value at *T*.  Returns the highest-priority, widest-range match, or
+        ``None`` if no valid partner exists (including *species* itself).
+
+        Args:
+            species: The condensed species to replace (must have ``condensed == 1``).
+            T: Target temperature [K].
+
+        Returns:
+            A replacement :class:`Species` object, or ``None`` if the current
+            species is already valid or no valid partner exists.
+        """
+        target_elements = tuple(sorted(species.elements.items()))
+        candidates: List[Species] = []
+        for sp in self._all_species:
+            if sp.condensed == 0:
+                continue
+            if tuple(sorted(sp.elements.items())) != target_elements:
+                continue
+            cp = sp.specific_heat_capacity(T)
+            if math.isfinite(cp) and cp > 0.0:
+                candidates.append(sp)
+        if not candidates:
+            return None
+
+        def _rank(sp: Species) -> tuple:
+            return (self._source_priority_map.get(sp.source, 0), self._t_range(sp))
+
+        return max(candidates, key=_rank)
+
     def _load_nasa7(self) -> None:
         with open(self.nasa7_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         for sp_id, rec in data.items():
             try:
+                t_low = rec["t_low"]
+                t_mid = rec["t_mid"]
+                low_coeffs = rec["coeffs"]["low"]
+                if all(abs(c) < 1e-30 for c in low_coeffs):
+                    t_low = t_mid
                 sp = NASASevenCoeff(
                     elements=rec["elements"],
                     state=self._phase_to_state(rec.get("phase", "G")),
-                    temperature=(rec["t_low"], rec["t_mid"], rec["t_high"]),
-                    coefficients=(rec["coeffs"]["low"], rec["coeffs"]["high"]),
+                    temperature=(t_low, t_mid, rec["t_high"]),
+                    coefficients=(low_coeffs, rec["coeffs"]["high"]),
                     phase=rec.get("phase"),
                 )
                 setattr(sp, "source_attribution", "NASA-7")

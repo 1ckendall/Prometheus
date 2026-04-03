@@ -183,14 +183,18 @@ class ProPepUI(QMainWindow):
             ed.input_pc.setText(self._format_pressure(pc * pressure_factor))
             ed.input_pc_min.setText(self._format_pressure(pc_min * pressure_factor))
             ed.input_pc_max.setText(self._format_pressure(pc_max * pressure_factor))
-            ed.input_ambient.setText(self._format_pressure(ambient_val * pressure_factor))
+            ed.input_ambient.setText(
+                self._format_pressure(ambient_val * pressure_factor)
+            )
             if is_pressure:
                 ed.input_exp.setText(self._format_pressure(exp_val * pressure_factor))
         elif system == "US":
             ed.input_pc.setText(self._format_pressure(pc * pressure_factor))
             ed.input_pc_min.setText(self._format_pressure(pc_min * pressure_factor))
             ed.input_pc_max.setText(self._format_pressure(pc_max * pressure_factor))
-            ed.input_ambient.setText(self._format_pressure(ambient_val * pressure_factor))
+            ed.input_ambient.setText(
+                self._format_pressure(ambient_val * pressure_factor)
+            )
             if is_pressure:
                 ed.input_exp.setText(self._format_pressure(exp_val * pressure_factor))
 

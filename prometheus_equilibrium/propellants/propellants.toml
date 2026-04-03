@@ -8911,15 +8911,6 @@ density = 0.000000
 roles = ["fuel"]
 
 [[ingredient]]
-id = "1_DIFLUOROAMINO_2_4_6_TRINITR"
-name = "1-DIFLUOROAMINO-2,4,6-TRINITR"
-elements = {C = 6.000000, F = 2.000000, H = 2.000000, N = 4.000000, O = 6.000000}
-molar_mass = 264.100806
-dHf298 = 20994.957700
-density = 0.000000
-roles = ["fuel"]
-
-[[ingredient]]
 id = "100DER321_43DEH14"
 name = "100DER321/43DEH14"
 elements = {C = 596.000000, H = 810.000000, N = 22.000000, O = 108.000000}
@@ -9703,8 +9694,8 @@ density = 2283.592139
 roles = ["oxidizer"]
 
 [[ingredient]]
-id = "COPPER_II_SULFATE_PENTAHYDRAT"
-name = "COPPER(II)SULFATE PENTAHYDRAT"
+id = "COPPER_II_SULFATE_PENTAHYDRATE"
+name = "COPPER(II)SULFATE PENTAHYDRATE"
 elements = {Cu = 1.000000, H = 10.000000, O = 9.000000, S = 1.000000}
 molar_mass = 249.677000
 dHf298 = -2278378.526808

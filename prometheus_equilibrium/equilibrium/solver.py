@@ -162,6 +162,7 @@ class EquilibriumSolver(ABC):
         self,
         problem: EquilibriumProblem,
         guess: Optional[Mixture] = None,
+        log_failure: bool = True,
     ) -> EquilibriumSolution:
         """Run the equilibrium calculation and return the converged state.
 
@@ -599,6 +600,7 @@ class PEPSolver(_ReactionAdjustmentBase):
         self,
         problem: EquilibriumProblem,
         guess: Optional[Mixture] = None,
+        log_failure: bool = True,
     ) -> EquilibriumSolution:
         """Run the equilibrium iteration.
 
@@ -1401,6 +1403,7 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
         self,
         problem: EquilibriumProblem,
         guess: Optional[Mixture] = None,
+        log_failure: bool = True,
     ) -> EquilibriumSolution:
         """Run the major-species equilibrium iteration.
 
@@ -2002,6 +2005,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
         self,
         problem: EquilibriumProblem,
         guess: Optional[Mixture] = None,
+        log_failure: bool = True,
     ) -> EquilibriumSolution:
         """Run the Gordon-McBride iteration and return the converged state.
 
@@ -2277,11 +2281,18 @@ class GordonMcBrideSolver(EquilibriumSolver):
                 "Convergence reached in {} iterations. Final T={:.2f} K", n_inner + 1, T
             )
         else:
-            _log.error(
-                "Failed to converge within {} iterations. Final T={:.2f} K",
-                self.max_iterations,
-                T,
-            )
+            if log_failure:
+                _log.error(
+                    "Failed to converge within {} iterations. Final T={:.2f} K",
+                    self.max_iterations,
+                    T,
+                )
+            else:
+                _log.debug(
+                    "Exploratory solve did not converge within {} iterations. Final T={:.2f} K",
+                    self.max_iterations,
+                    T,
+                )
 
         residuals = em.element_residuals(mixture.moles, b0)
         return EquilibriumSolution(

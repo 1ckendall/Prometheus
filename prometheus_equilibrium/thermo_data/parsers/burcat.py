@@ -234,7 +234,8 @@ class Burcat7Parser(NASA7Parser):
                 continue
 
             phase_raw = fw(h1, *_HDR_PHASE).strip()
-            phase = phase_raw if phase_raw in ("G", "S", "L") else "G"
+            _PHASE_MAP = {"G": "G", "S": "S", "L": "L", "C": "L", "B": "L"}
+            phase = _PHASE_MAP.get(phase_raw.upper(), "G")
 
             # Coefficient layout across lines 2-4:
             # h2: high[0..4]

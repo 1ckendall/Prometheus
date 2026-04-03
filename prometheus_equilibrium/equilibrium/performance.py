@@ -27,6 +27,7 @@ from typing import List, Optional
 import numpy as np
 from loguru import logger
 
+from prometheus_equilibrium.equilibrium.diagnostics import NonConvergenceReason
 from prometheus_equilibrium.equilibrium.problem import EquilibriumProblem, ProblemType
 from prometheus_equilibrium.equilibrium.solution import EquilibriumSolution
 from prometheus_equilibrium.equilibrium.solver import (
@@ -99,8 +100,9 @@ class PerformanceSolver:
             print(f"Isp = {result.shifting.isp_vac:.1f} m/s  (vacuum, shifting)")
     """
 
-    def __init__(self, solver: Optional[EquilibriumSolver] = None):
+    def __init__(self, solver: Optional[EquilibriumSolver] = None, db=None):
         self.solver = solver or GordonMcBrideSolver()
+        self.db = db  # Optional SpeciesDatabase for condensed phase transitions
 
     def solve(
         self,
@@ -125,6 +127,10 @@ class PerformanceSolver:
 
         # 2. Throat Solve
         throat = self._find_throat(chamber, shifting)
+        if not throat.converged:
+            raise RuntimeError(
+                f"Throat solve did not converge ({throat.failure_reason})."
+            )
 
         # 3. Exit Solve
         if pe_pa is not None:
@@ -132,6 +138,10 @@ class PerformanceSolver:
         else:
             exit_sol = self._find_exit_at_area_ratio(
                 chamber, throat, area_ratio, shifting
+            )
+        if not exit_sol.converged:
+            raise RuntimeError(
+                f"Exit solve did not converge ({exit_sol.failure_reason})."
             )
 
         # 4. Metrics
@@ -338,7 +348,13 @@ class PerformanceSolver:
 
         last_guess = chamber
         for p in pressures:
-            sol = self._solve_at_p(chamber, p, shifting, guess=last_guess)
+            sol = self._solve_at_p(
+                chamber,
+                p,
+                shifting,
+                guess=last_guess,
+                log_failure=False,
+            )
             if sol.converged:
                 # Add Mach number to the solution object dynamically for plotting
                 # v = sqrt(2 * (Hc_mass - H_mass))
@@ -371,7 +387,13 @@ class PerformanceSolver:
         mdot_per_at = throat.density * v_t
 
         def get_ar_error(p, guess):
-            sol = self._solve_at_p(chamber, p, shifting=True, guess=guess)
+            sol = self._solve_at_p(
+                chamber,
+                p,
+                shifting=True,
+                guess=guess,
+                log_failure=False,
+            )
             if not sol.converged:
                 return float("nan"), sol
             # v = sqrt(2 * (Hc_mass - He_mass))
@@ -454,7 +476,13 @@ class PerformanceSolver:
 
         # 2. Newton-Raphson refinement for shifting equilibrium
         def get_mach_error(p, guess):
-            sol = self._solve_at_p(chamber, p, shifting=True, guess=guess)
+            sol = self._solve_at_p(
+                chamber,
+                p,
+                shifting=True,
+                guess=guess,
+                log_failure=False,
+            )
             if not sol.converged:
                 return float("nan"), sol
             # v = sqrt(2 * (Hc_mass - H_mass))
@@ -522,6 +550,7 @@ class PerformanceSolver:
         p_target: float,
         shifting: bool,
         guess: Optional[EquilibriumSolution] = None,
+        log_failure: bool = True,
     ) -> EquilibriumSolution:
         """Solve for state at a given pressure, preserving entropy."""
         if shifting:
@@ -544,10 +573,49 @@ class PerformanceSolver:
                 constraint2=p_target,
                 t_init=guess.temperature if guess else chamber.temperature * 0.8,
             )
-            return self.solver.solve(sp_prob, guess=guess.mixture if guess else None)
+            return self.solver.solve(
+                sp_prob,
+                guess=guess.mixture if guess else None,
+                log_failure=log_failure,
+            )
         else:
             # Frozen: fix composition at chamber values
             return self._solve_frozen_at_p(chamber, p_target)
+
+    def _apply_phase_transitions(self, mix: "Mixture", T: float) -> "Mixture":
+        """Replace condensed species whose thermo data is invalid at *T*.
+
+        For each condensed species in *mix* whose Cp evaluates to nan or zero
+        at *T*, looks up a phase partner in ``self.db`` valid at *T* and
+        substitutes it (conserving moles).  Returns the (possibly mutated)
+        mixture.  If ``self.db`` is None, returns *mix* unchanged.
+
+        Args:
+            mix: Current mixture whose condensed species may need replacing.
+            T: Target temperature [K].
+
+        Returns:
+            The original *mix* if no substitutions were needed, otherwise a
+            new :class:`Mixture` with replacement species and the same moles.
+        """
+        if self.db is None:
+            return mix
+        new_species = list(mix.species)
+        changed = False
+        for idx, sp in enumerate(new_species):
+            if sp.condensed == 0:
+                continue
+            cp = sp.specific_heat_capacity(T)
+            if not math.isfinite(cp) or cp <= 0.0:
+                partner = self.db.condensed_phase_partner(sp, T)
+                if partner is not None and partner is not sp:
+                    new_species[idx] = partner
+                    changed = True
+        if not changed:
+            return mix
+        from prometheus_equilibrium.equilibrium.mixture import Mixture
+
+        return Mixture(new_species, mix.moles.copy())
 
     def _solve_frozen_at_p(
         self, chamber: EquilibriumSolution, p_target: float
@@ -559,29 +627,52 @@ class PerformanceSolver:
         # Use Newton to find T, with safety clamping
         T = chamber.temperature * 0.8
         i = 0
+        converged = False
+        failure_reason: Optional[NonConvergenceReason] = None
+        last_step_norm = float("nan")
         for i in range(50):
             # Clamp T to valid range for thermo data
             T = max(200.0, min(6000.0, T))
+            mix = self._apply_phase_transitions(mix, T)
             s_curr = mix.entropy(T, p_target)
             cp_curr = mix.cp(T)
 
+            if not (
+                math.isfinite(s_curr) and math.isfinite(cp_curr) and math.isfinite(T)
+            ):
+                failure_reason = NonConvergenceReason.INVALID_THERMO_PROPERTIES
+                break
+
             ds_dT = cp_curr / T
-            if abs(ds_dT) < 1e-10:
+            if not math.isfinite(ds_dT) or abs(ds_dT) < 1e-10:
+                failure_reason = NonConvergenceReason.INVALID_THERMO_PROPERTIES
                 break
 
             dT = (s_target - s_curr) / ds_dT
+            if not math.isfinite(dT):
+                failure_reason = NonConvergenceReason.INVALID_THERMO_PROPERTIES
+                break
+
+            last_step_norm = abs(dT)
             # Damp the Newton step
             T += max(-200.0, min(200.0, dT))
 
             if abs(dT) < 1e-3:
+                converged = True
                 break
+
+        if not converged and failure_reason is None:
+            failure_reason = NonConvergenceReason.MAX_ITERATIONS_REACHED
 
         return EquilibriumSolution(
             mixture=mix,
             temperature=T,
             pressure=p_target,
-            converged=True,
+            converged=converged,
             iterations=i + 1,
             residuals=np.zeros(0),
             lagrange_multipliers=np.zeros(0),
+            failure_reason=failure_reason if not converged else None,
+            element_balance_error=0.0,
+            last_step_norm=last_step_norm,
         )

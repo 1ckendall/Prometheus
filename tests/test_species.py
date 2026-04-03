@@ -283,6 +283,36 @@ def test_database_priority_override_prefers_janaf():
     assert deduped["H2O_G"] is sp_janaf
 
 
+def test_database_deduplicate_keeps_distinct_condensed_variants():
+    """Condensed variants with different aliases should not be collapsed together."""
+    db = SpeciesDatabase("dummy", "dummy", "dummy")
+
+    sp_alpha = NASANineCoeff(
+        elements={"Al": 2, "O": 3},
+        state="S",
+        temperatures=(300.0, 2327.0),
+        exponents=((0.0, 1.0, 2.0),),
+        coefficients=((1.0, 1.0, 1.0, 0.0, 0.0),),
+        alias="AL2O3(a)",
+    )
+    sp_liq = NASANineCoeff(
+        elements={"Al": 2, "O": 3},
+        state="S",
+        temperatures=(2327.0, 6000.0),
+        exponents=((0.0, 1.0, 2.0),),
+        coefficients=((1.0, 1.0, 1.0, 0.0, 0.0),),
+        alias="AL2O3(L)",
+    )
+    setattr(sp_alpha, "source_attribution", "NASA-9")
+    setattr(sp_liq, "source_attribution", "NASA-9")
+
+    deduped = db._deduplicate([sp_alpha, sp_liq])
+
+    assert len(deduped) == 2
+    assert any(key.startswith("Al2O3_S__AL2O3_A") for key in deduped)
+    assert any(key.startswith("Al2O3_S__AL2O3_L") for key in deduped)
+
+
 def test_database_exact_key_dunder_lookup():
     """__getitem__ and __contains__ should operate on exact canonical keys only."""
     db = SpeciesDatabase("dummy", "dummy", "dummy")

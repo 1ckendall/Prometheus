@@ -34,12 +34,13 @@ computed from combinations of the basic mixture properties.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Dict
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 import numpy as np
 
 from prometheus_equilibrium.core.constants import UNIVERSAL_GAS_CONSTANT as R
+from prometheus_equilibrium.equilibrium.diagnostics import NonConvergenceReason
 from prometheus_equilibrium.equilibrium.mixture import Mixture
 
 
@@ -62,11 +63,21 @@ class EquilibriumSolution:
         pressure: Equilibrium pressure P [Pa].
         converged: True if all convergence criteria were satisfied.
         iterations: Number of Newton iterations taken.
-        residuals: Final element-balance residuals ||Δb||, shape (n_elements,).
+        residuals: Final element-balance residuals b₀ − Aᵀ·n, shape (n_elements,).
         lagrange_multipliers: Converged reduced Lagrange multipliers π,
             shape (n_elements,).  The chemical potential of element k at
             equilibrium is λₖ = −R·T·πₖ.
         history: List of states at each iteration, used for convergence plots.
+        failure_reason: If ``converged`` is False, the enum value describing
+            why the solver stopped.  ``None`` on a successful solve.
+        element_balance_error: ``max(|b₀ − Aᵀ·n|)`` over all elements at the
+            final iteration.  Always populated (even on convergence) so it can
+            be used to verify element conservation independently.
+        last_step_norm: Solver-specific convergence criterion on the final
+            iteration — the same quantity that is compared against ``tolerance``.
+            For Newton solvers this is ``max(|nⱼ·Δln nⱼ| / n_gas, |Δln n|)``;
+            for PEP and the outer temperature search it is the energy/element
+            residual norm at the last step.  Always populated.
     """
 
     mixture: Mixture
@@ -76,7 +87,10 @@ class EquilibriumSolution:
     iterations: int
     residuals: np.ndarray
     lagrange_multipliers: np.ndarray
-    history: List[ConvergenceStep] = None
+    history: Optional[List[ConvergenceStep]] = None
+    failure_reason: Optional[NonConvergenceReason] = None
+    element_balance_error: Optional[float] = None
+    last_step_norm: Optional[float] = None
 
     # ------------------------------------------------------------------
     # Composition
@@ -315,6 +329,13 @@ class EquilibriumSolution:
                 ]
             except (ValueError, ZeroDivisionError):
                 pass
+        else:
+            if self.failure_reason is not None:
+                lines.append(f"  failure    = {self.failure_reason.name}")
+            if self.element_balance_error is not None:
+                lines.append(f"  el_balance = {self.element_balance_error:.3e}")
+            if self.last_step_norm is not None:
+                lines.append(f"  step_norm  = {self.last_step_norm:.3e}")
         lines.append("  Major species (xⱼ ≥ 1e-4):")
         for name, x in self.major_species().items():
             lines.append(f"    {name:30s}  {x:.6f}")

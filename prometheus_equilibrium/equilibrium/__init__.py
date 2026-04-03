@@ -61,6 +61,7 @@ Quick-start example::
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>
 
+from prometheus_equilibrium.equilibrium.diagnostics import NonConvergenceReason
 from prometheus_equilibrium.equilibrium.element_matrix import ElementMatrix
 from prometheus_equilibrium.equilibrium.mixture import Mixture
 from prometheus_equilibrium.equilibrium.performance import (
@@ -84,6 +85,7 @@ __all__ = [
     "EquilibriumProblem",
     "ProblemType",
     "EquilibriumSolution",
+    "NonConvergenceReason",
     "EquilibriumSolver",
     "MajorSpeciesSolver",
     "PEPSolver",

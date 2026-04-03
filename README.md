@@ -9,6 +9,31 @@ chamber combustion (HP) and isentropic nozzle expansion (SP).
 
 Pre-1.0 (`v0.1.0`), active development. Core solver infrastructure and all
 thermo-data parsers are complete; the recommended solver is `GordonMcBrideSolver`.
+Expect breaking changes to the API and data formats!
+
+## TO-IMPLEMENT Roadmap
+
+Nice-to-have items for upcoming releases, grouped by impact area.
+
+### Core Solver and Data
+
+- [x] Add structured non-convergence diagnostics to `EquilibriumSolution` (failure reason, residuals, element-balance error, last step norm).
+- [ ] Implement `PEPSolver._tp_equilibrium` and add regression coverage for TP/HP/SP behavior.
+- [ ] Add optional numerical-stability fallback modes for difficult edge cases (adaptive damping / tighter line search controls).
+- [ ] Add lightweight profiling hooks to report per-iteration timing and major matrix-solve costs.
+- [ ] Investigate if key species from the species database can also be used as propellant ingredients e.g. methane, oxygen
+
+### GUI
+
+- [ ] Implement full report export from the GUI (TXT/CSV/JSON) including sweep metadata and final plots.
+- [ ] Add progress + cancel support for long sweep runs in `PerformanceWorker`.
+- [ ] Persist user session settings (units, selected species databases, sweep mode, and recent inputs).
+
+### CLI and Tooling
+
+- [ ] Add a non-interactive solve CLI for HP/TP/SP runs with machine-readable output (`--json` / `--csv`).
+- [ ] Add benchmark baseline comparison mode in `tests/benchmark.py` with threshold-based pass/fail output for CI.
+- [ ] Add strict non-interactive build options in thermo tooling (`--no-prompt`, `--fail-on-missing-label`) for reproducible automation.
 
 ## Features
 

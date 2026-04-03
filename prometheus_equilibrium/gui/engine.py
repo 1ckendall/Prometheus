@@ -55,6 +55,7 @@ class PerformanceWorker(QThread):
         is_pressure,
         ambient_pressure,
         solver,
+        spec_db,
         sweep_axis="none",
         sweep_label="Run Index",
     ):
@@ -65,7 +66,8 @@ class PerformanceWorker(QThread):
         self.ambient_pressure = ambient_pressure
         self.sweep_axis = sweep_axis
         self.sweep_label = sweep_label
-        self.perf_solver = PerformanceSolver(solver)
+        # Performance expansion can require condensed-phase partner swaps at low T.
+        self.perf_solver = PerformanceSolver(solver, db=spec_db)
 
     def run(self):
         try:
@@ -567,6 +569,7 @@ class EngineDock(QDockWidget):
             is_pressure,
             ambient_pa,
             self.solver,
+            self.main_window.spec_db,
             sweep_axis=sweep_axis,
             sweep_label=sweep_label,
         )
