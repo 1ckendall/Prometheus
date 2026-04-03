@@ -201,6 +201,8 @@ class ProPepUI(QMainWindow):
         self.current_units = system
         if hasattr(ed, "refresh_pressure_labels"):
             ed.refresh_pressure_labels()
+        if hasattr(ed, "refresh_report_for_units"):
+            ed.refresh_report_for_units()
         self.statusBar().showMessage(
             f"Unit system changed to {self.current_units}", 3000
         )

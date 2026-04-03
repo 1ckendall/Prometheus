@@ -286,6 +286,7 @@ class EngineDock(QDockWidget):
         # Solver components
         self.solver = GordonMcBrideSolver()
         self.worker = None
+        self._last_report_payload = None
 
     def on_db_selection_changed(self, state):
         # Notify species explorer to refresh its list
@@ -362,6 +363,182 @@ class EngineDock(QDockWidget):
     def update_actual_of(self):
         # Forward to simulator page if needed, or update here
         pass
+
+    def _pressure_display_unit(self) -> str:
+        return "MPa" if self.main_window.current_units == "SI" else "PSI"
+
+    def _temperature_display_unit(self) -> str:
+        return "K" if self.main_window.current_units == "SI" else "F"
+
+    def _pressure_to_display(self, p_pa: float) -> float:
+        if self.main_window.current_units == "SI":
+            return p_pa / _PA_PER_MPA
+        return p_pa / _PA_PER_PSI
+
+    def _temperature_to_display(self, t_k: float) -> float:
+        if self.main_window.current_units == "SI":
+            return t_k
+        return (t_k * 9.0 / 5.0) - 459.67
+
+    def _build_performance_report_text(self, payload: dict) -> str:
+        cases = payload.get("cases", [])
+        _, perf = cases[0]
+        shifting = perf.shifting
+        frozen = perf.frozen
+        chamber = shifting.chamber
+
+        p_unit = self._pressure_display_unit()
+        t_unit = self._temperature_display_unit()
+        spec_kind = payload.get("spec_kind", "pressure")
+        if spec_kind == "pressure":
+            expansion_spec = (
+                f"Pe target: {self._pressure_to_display(shifting.exit.pressure):.6f} {p_unit}"
+            )
+        else:
+            expansion_spec = f"Ae/At target: {payload.get('expansion_target', shifting.area_ratio):.3f}"
+
+        def _state_row(mode, sol):
+            return (
+                f"{mode:<10}"
+                f"{self._temperature_to_display(sol.temperature):>11.2f}"
+                f"{self._pressure_to_display(sol.pressure):>12.6f}"
+                f"{sol.gamma:>9.4f}"
+                f"{sol.gas_mean_molar_mass * 1000:>12.3f}"
+            )
+
+        def _perf_row(mode, perf_result):
+            return (
+                f"{mode:<10}"
+                f"{perf_result.isp_actual:>10.2f}"
+                f"{perf_result.isp_vac:>10.2f}"
+                f"{perf_result.isp_sl:>10.2f}"
+                f"{perf_result.cstar:>10.1f}"
+                f"{perf_result.area_ratio:>9.3f}"
+                f"{perf_result.pressure_ratio:>9.2f}"
+                f"{self._temperature_to_display(perf_result.throat.temperature):>11.2f}"
+                f"{self._temperature_to_display(perf_result.exit.temperature):>11.2f}"
+            )
+
+        lines = [
+            "=== Rocket Performance Report ===",
+            "",
+            "[Simulation Configuration]",
+            f"Unit System: {self.main_window.current_units}",
+            f"Temperature Unit: {t_unit}",
+            f"Pressure Unit: {p_unit}",
+            f"Ambient pressure : {self._pressure_to_display(perf.ambient_pressure):.6f} {p_unit}",
+            f"Expansion target : {expansion_spec}",
+            "",
+            "[Shared Chamber State]",
+            f"Mode        T({t_unit})     P({p_unit})    gamma   M(g/mol)",
+            "-----------------------------------------------------------",
+            _state_row("Chamber", chamber),
+            "",
+            "[Exit State Comparison]",
+            f"Mode        T({t_unit})     P({p_unit})    gamma   M(g/mol)",
+            "-----------------------------------------------------------",
+            _state_row("Frozen", frozen.exit),
+            _state_row("Shifting", shifting.exit),
+            "",
+            "[Performance Comparison]",
+            f"Mode       Isp(act)  Isp(vac)   Isp(SL)        C*    Ae/At    Pc/Pe    T* ({t_unit})    Te ({t_unit})",
+            "-------------------------------------------------------------------------------------------------------",
+            _perf_row("Frozen", frozen),
+            _perf_row("Shifting", shifting),
+            "",
+            "[Chamber Species Moles]",
+            "Species                      Moles",
+            "----------------------------------------",
+        ]
+
+        species_moles = list(zip(chamber.mixture.species, chamber.mixture.moles))
+        for sp, n in sorted(species_moles, key=lambda x: x[1], reverse=True):
+            if n > 1e-6:
+                lines.append(f"{str(sp):<27} {n:>12.4e}")
+
+        lines.extend(
+            [
+                "",
+                "[Machine Data | format=prometheus-report-v1]",
+                f"unit_system={self.main_window.current_units}",
+                f"temperature_unit={t_unit}",
+                f"pressure_unit={p_unit}",
+                f"ambient_pressure={self._pressure_to_display(perf.ambient_pressure):.10g}",
+                f"chamber_temperature={self._temperature_to_display(chamber.temperature):.10g}",
+                f"chamber_pressure={self._pressure_to_display(chamber.pressure):.10g}",
+                f"frozen_exit_temperature={self._temperature_to_display(frozen.exit.temperature):.10g}",
+                f"frozen_exit_pressure={self._pressure_to_display(frozen.exit.pressure):.10g}",
+                f"shifting_exit_temperature={self._temperature_to_display(shifting.exit.temperature):.10g}",
+                f"shifting_exit_pressure={self._pressure_to_display(shifting.exit.pressure):.10g}",
+                f"isp_actual_frozen={frozen.isp_actual:.10g}",
+                f"isp_actual_shifting={shifting.isp_actual:.10g}",
+                f"cstar_frozen={frozen.cstar:.10g}",
+                f"cstar_shifting={shifting.cstar:.10g}",
+                f"area_ratio_frozen={frozen.area_ratio:.10g}",
+                f"area_ratio_shifting={shifting.area_ratio:.10g}",
+                f"pressure_ratio_frozen={frozen.pressure_ratio:.10g}",
+                f"pressure_ratio_shifting={shifting.pressure_ratio:.10g}",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _build_equilibrium_report_text(self, sol) -> str:
+        t_unit = self._temperature_display_unit()
+        p_unit = self._pressure_display_unit()
+        t_disp = self._temperature_to_display(sol.temperature)
+        p_disp = self._pressure_to_display(sol.pressure)
+        cp_unit = "J/mol.K"
+        lines = [
+            "=== Equilibrium Solution Report ===",
+            "",
+            "[State]",
+            f"Unit System: {self.main_window.current_units}",
+            f"Temperature Unit: {t_unit}",
+            f"Pressure Unit: {p_unit}",
+            f"Converged: {sol.converged} in {sol.iterations} iterations",
+            f"Temperature: {t_disp:.2f} {t_unit}",
+            f"Pressure: {p_disp:.6f} {p_unit}",
+            f"Mean Molar Mass: {sol.gas_mean_molar_mass * 1000:.3f} g/mol",
+            f"Gamma (cp/cv): {sol.gamma:.4f}",
+            f"Cp: {sol.cp:.2f} {cp_unit}",
+            "",
+            "[Species Moles]",
+        ]
+        species_moles = list(zip(sol.mixture.species, sol.mixture.moles))
+        for sp, n in sorted(species_moles, key=lambda x: x[1], reverse=True):
+            if n > 1e-6:
+                lines.append(f"{str(sp):<25}: {n:.4e}")
+
+        lines.extend(
+            [
+                "",
+                "[Machine Data | format=prometheus-report-v1]",
+                f"unit_system={self.main_window.current_units}",
+                f"temperature_unit={t_unit}",
+                f"pressure_unit={p_unit}",
+                f"temperature={t_disp:.10g}",
+                f"pressure={p_disp:.10g}",
+                f"mean_molar_mass_g_per_mol={sol.gas_mean_molar_mass * 1000:.10g}",
+                f"gamma={sol.gamma:.10g}",
+                f"cp={sol.cp:.10g}",
+            ]
+        )
+        return "\n".join(lines)
+
+    def refresh_report_for_units(self) -> None:
+        """Re-render the latest successful report with the active unit system."""
+        payload = self._last_report_payload
+        if not payload:
+            return
+        report_type = payload.get("type")
+        if report_type == "performance":
+            self.main_window.page_analysis.results_text.setText(
+                self._build_performance_report_text(payload)
+            )
+        elif report_type == "equilibrium":
+            self.main_window.page_analysis.results_text.setText(
+                self._build_equilibrium_report_text(payload["solution"])
+            )
 
     def _render_error_report(self, title: str, message: str, tb: str = "") -> None:
         report = [
@@ -652,6 +829,7 @@ class EngineDock(QDockWidget):
             self.res_tc.setText("ERROR")
             self.main_window.statusBar().showMessage(f"Performance Error: {msg}", 12000)
             self._render_error_report("Performance Solver Error", msg, tb)
+            self._last_report_payload = None
             return
 
         if isinstance(result, str):
@@ -660,6 +838,7 @@ class EngineDock(QDockWidget):
                 f"Performance Error: {result}", 12000
             )
             self._render_error_report("Performance Solver Error", result)
+            self._last_report_payload = None
             return
 
         payload = result if isinstance(result, dict) else {"cases": [(None, result)]}
@@ -672,6 +851,7 @@ class EngineDock(QDockWidget):
             self._render_error_report(
                 "Performance Solver Error", "No results returned."
             )
+            self._last_report_payload = None
             return
 
         _, perf = cases[0]
@@ -681,6 +861,7 @@ class EngineDock(QDockWidget):
                 f"Performance Error: {perf}", 12000
             )
             self._render_error_report("Performance Solver Error", perf)
+            self._last_report_payload = None
             return
 
         perf: RocketPerformanceComparison
@@ -704,71 +885,17 @@ class EngineDock(QDockWidget):
 
             chamber = shifting.chamber
             is_pressure_spec = "Pressure" in self.spec_combo.currentText()
-            if is_pressure_spec:
-                expansion_spec = (
-                    f"Pe target: {shifting.exit.pressure / _PA_PER_MPA:.6f} MPa "
-                    f"({shifting.exit.pressure:.2f} Pa)"
-                )
-            else:
-                expansion_spec = f"Ae/At target: {float(self.input_exp.text()):.3f}"
-
-            def _state_row(mode, sol):
-                t_f = (sol.temperature * 9.0 / 5.0) - 459.67
-                p_atm = sol.pressure / 101325.0
-                p_psi = sol.pressure / 6894.757
-                return (
-                    f"{mode:<10}"
-                    f"{sol.temperature:>9.1f}"
-                    f"{t_f:>9.1f}"
-                    f"{p_atm:>9.3f}"
-                    f"{p_psi:>10.2f}"
-                    f"{sol.gamma:>9.4f}"
-                    f"{sol.gas_mean_molar_mass * 1000:>11.3f}"
-                )
-
-            def _perf_row(mode, perf_result):
-                return (
-                    f"{mode:<10}"
-                    f"{perf_result.isp_actual:>10.2f}"
-                    f"{perf_result.isp_vac:>10.2f}"
-                    f"{perf_result.isp_sl:>10.2f}"
-                    f"{perf_result.cstar:>10.1f}"
-                    f"{perf_result.area_ratio:>9.3f}"
-                    f"{perf_result.pressure_ratio:>9.2f}"
-                    f"{perf_result.throat.temperature:>9.1f}"
-                    f"{perf_result.exit.temperature:>9.1f}"
-                )
-
-            report_text = (
-                "=== Rocket Performance Report ===\n\n"
-                "[Simulation Configuration]\n"
-                f"Ambient pressure : {perf.ambient_pressure:.2f} Pa\n"
-                f"Expansion target : {expansion_spec}\n\n"
-                "[Shared Chamber State]\n"
-                "Mode          T(K)     T(F)   P(atm)    P(psi)    gamma  M(g/mol)\n"
-                "-------------------------------------------------------------------\n"
-                f"{_state_row('Chamber', chamber)}\n\n"
-                "[Exit State Comparison]\n"
-                "Mode          T(K)     T(F)   P(atm)    P(psi)    gamma  M(g/mol)\n"
-                "-------------------------------------------------------------------\n"
-                f"{_state_row('Frozen', frozen.exit)}\n"
-                f"{_state_row('Shifting', shifting.exit)}\n\n"
-                "[Performance Comparison]\n"
-                "Mode       Isp(act)  Isp(vac)   Isp(SL)        C*    Ae/At    Pc/Pe     T* (K)    Te (K)\n"
-                "------------------------------------------------------------------------------------------\n"
-                f"{_perf_row('Frozen', frozen)}\n"
-                f"{_perf_row('Shifting', shifting)}\n\n"
-                "[Chamber Species Moles]\n"
-                "Species                      Moles\n"
-                "----------------------------------------\n"
+            self._last_report_payload = {
+                "type": "performance",
+                "cases": cases,
+                "sweep_axis": sweep_axis,
+                "sweep_label": sweep_label,
+                "spec_kind": "pressure" if is_pressure_spec else "area",
+                "expansion_target": float(self.input_exp.text()),
+            }
+            self.main_window.page_analysis.results_text.setText(
+                self._build_performance_report_text(self._last_report_payload)
             )
-
-            species_moles = list(zip(chamber.mixture.species, chamber.mixture.moles))
-            for sp, n in sorted(species_moles, key=lambda x: x[1], reverse=True):
-                if n > 1e-6:
-                    report_text += f"{str(sp):<27} {n:>12.4e}\n"
-
-            self.main_window.page_analysis.results_text.setText(report_text)
             self.main_window.page_analysis.update_convergence_plots(shifting.chamber)
             self.main_window.page_analysis.update_expansion_plots(perf)
             self.main_window.page_analysis.update_performance_plots(
@@ -782,6 +909,7 @@ class EngineDock(QDockWidget):
             fail_msg = "Performance solve failed to converge."
             self.main_window.statusBar().showMessage(fail_msg, 5000)
             self._render_error_report("Performance Solver Failure", fail_msg)
+            self._last_report_payload = None
 
     def on_solve_finished(self, result):
         self._finish_run_progress()
@@ -795,12 +923,14 @@ class EngineDock(QDockWidget):
                 self.res_tc.setText("ERROR")
                 self.main_window.statusBar().showMessage(f"Solver Error: {msg}", 10000)
                 self._render_error_report("Equilibrium Solver Error", msg, tb)
+                self._last_report_payload = None
                 return
             sol = result.get("solution")
         elif isinstance(result, str):
             self.res_tc.setText("ERROR")
             self.main_window.statusBar().showMessage(f"Solver Error: {result}", 10000)
             self._render_error_report("Equilibrium Solver Error", result)
+            self._last_report_payload = None
             return
         else:
             sol = result
@@ -829,23 +959,10 @@ class EngineDock(QDockWidget):
             )
 
             # Update report
-            report_text = (
-                f"--- Equilibrium Solution ---\n\n"
-                f"Converged: {sol.converged} in {sol.iterations} iterations\n"
-                f"Temperature: {sol.temperature:.2f} K\n"
-                f"Pressure: {sol.pressure:.2e} Pa\n"
-                f"Mean Molar Mass: {sol.gas_mean_molar_mass*1000:.3f} g/mol\n"
-                f"Gamma (cp/cv): {sol.gamma:.4f}\n"
-                f"Cp: {sol.cp:.2f} J/mol.K\n\n"
-                f"--- Species Moles ---\n"
+            self._last_report_payload = {"type": "equilibrium", "solution": sol}
+            self.main_window.page_analysis.results_text.setText(
+                self._build_equilibrium_report_text(sol)
             )
-
-            species_moles = list(zip(sol.mixture.species, sol.mixture.moles))
-            for sp, n in sorted(species_moles, key=lambda x: x[1], reverse=True):
-                if n > 1e-6:
-                    report_text += f"{str(sp):<25}: {n:.4e}\n"
-
-            self.main_window.page_analysis.results_text.setText(report_text)
             self.main_window.page_analysis.update_convergence_plots(sol)
 
         else:
@@ -853,3 +970,4 @@ class EngineDock(QDockWidget):
             fail_msg = "Solver failed to converge."
             self.main_window.statusBar().showMessage(fail_msg, 5000)
             self._render_error_report("Equilibrium Solver Failure", fail_msg)
+            self._last_report_payload = None
