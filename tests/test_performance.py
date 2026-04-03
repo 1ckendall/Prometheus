@@ -198,6 +198,28 @@ class _WindowedEntropyGas(_LogEntropyGas):
         return float("nan")
 
 
+class _ConstantCondensedSpecies(Species):
+    """Simple condensed species with finite constant thermo for SP setup tests."""
+
+    def __init__(self, elements, cp_over_r, s_ref_over_r, molar_mass_kg=0.05):
+        super().__init__(elements=elements, state="S")
+        self._cp_r = float(cp_over_r)
+        self._s0_r = float(s_ref_over_r)
+        self._M = float(molar_mass_kg)
+
+    def molar_mass(self):
+        return self._M
+
+    def specific_heat_capacity(self, T):
+        return self._cp_r * R
+
+    def enthalpy(self, T):
+        return self._cp_r * R * float(T)
+
+    def entropy(self, T):
+        return self._s0_r * R
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -272,6 +294,102 @@ def test_shifting_nozzle_isp_vac_positive(log_entropy_hp_problem):
     problem, _, _ = log_entropy_hp_problem
     result = PerformanceSolver().solve(problem, pe_pa=P_REF, shifting=True)
     assert result.isp_vac > 0
+
+
+def test_shifting_sp_problem_default_uses_total_entropy_constraint(monkeypatch):
+    """Default shifting SP setup should use normalized whole-flow entropy."""
+    gas = _LogEntropyGas({"X": 1}, cp_over_r=4.0, s_ref_over_r=2.0, molar_mass_kg=0.02)
+    condensed = _ConstantCondensedSpecies(
+        {"X": 1}, cp_over_r=2.0, s_ref_over_r=15.0, molar_mass_kg=0.05
+    )
+    chamber_mix = Mixture([gas, condensed], np.array([2.0, 1.0], dtype=float))
+    chamber = EquilibriumSolution(
+        mixture=chamber_mix,
+        temperature=3200.0,
+        pressure=3.0e6,
+        converged=True,
+        iterations=1,
+        residuals=np.zeros(0),
+        lagrange_multipliers=np.zeros(0),
+    )
+
+    perf = PerformanceSolver()
+    captured = {}
+
+    def _fake_sp_solve(problem, guess=None, log_failure=True):
+        captured["problem"] = problem
+        return EquilibriumSolution(
+            mixture=chamber_mix.copy(),
+            temperature=2000.0,
+            pressure=101325.0,
+            converged=True,
+            iterations=1,
+            residuals=np.zeros(0),
+            lagrange_multipliers=np.zeros(0),
+        )
+
+    monkeypatch.setattr(perf.solver, "solve", _fake_sp_solve)
+    _ = perf._solve_at_p(chamber, 101325.0, shifting=True)
+
+    sp_problem = captured["problem"]
+    species_map = perf._build_condensed_entropy_normalization_map(
+        chamber_mix.species, reference_temperature=298.15
+    )
+    normalized_mix = perf._remap_mixture_species(chamber_mix, species_map)
+    expected_target = normalized_mix.total_entropy(chamber.temperature, chamber.pressure)
+    assert sp_problem.problem_type == ProblemType.SP
+    assert sp_problem.constraint1 == pytest.approx(expected_target)
+    assert sp_problem.sp_entropy_mode == "total"
+    assert chamber.total_entropy != pytest.approx(chamber.total_gas_entropy)
+
+
+def test_shifting_sp_problem_total_mode_uses_raw_total_entropy(monkeypatch):
+    """Explicit total mode should use un-normalized whole-flow entropy."""
+    gas = _LogEntropyGas({"X": 1}, cp_over_r=4.0, s_ref_over_r=2.0, molar_mass_kg=0.02)
+    condensed = _ConstantCondensedSpecies(
+        {"X": 1}, cp_over_r=2.0, s_ref_over_r=15.0, molar_mass_kg=0.05
+    )
+    chamber_mix = Mixture([gas, condensed], np.array([2.0, 1.0], dtype=float))
+    chamber = EquilibriumSolution(
+        mixture=chamber_mix,
+        temperature=3200.0,
+        pressure=3.0e6,
+        converged=True,
+        iterations=1,
+        residuals=np.zeros(0),
+        lagrange_multipliers=np.zeros(0),
+    )
+
+    perf = PerformanceSolver(sp_entropy_mode="total")
+    captured = {}
+
+    def _fake_sp_solve(problem, guess=None, log_failure=True):
+        captured["problem"] = problem
+        return EquilibriumSolution(
+            mixture=chamber_mix.copy(),
+            temperature=2000.0,
+            pressure=101325.0,
+            converged=True,
+            iterations=1,
+            residuals=np.zeros(0),
+            lagrange_multipliers=np.zeros(0),
+        )
+
+    monkeypatch.setattr(perf.solver, "solve", _fake_sp_solve)
+    _ = perf._solve_at_p(chamber, 101325.0, shifting=True)
+
+    sp_problem = captured["problem"]
+    assert sp_problem.problem_type == ProblemType.SP
+    assert sp_problem.constraint1 == pytest.approx(chamber.total_entropy)
+    assert sp_problem.sp_entropy_mode == "total"
+
+
+def test_performance_solver_rejects_gas_or_auto_entropy_modes():
+    """Gas-only and auto fallback modes are disallowed for shifting SP."""
+    with pytest.raises(ValueError, match="sp_entropy_mode"):
+        PerformanceSolver(sp_entropy_mode="gas")
+    with pytest.raises(ValueError, match="sp_entropy_mode"):
+        PerformanceSolver(sp_entropy_mode="auto")
 
 
 # ---------------------------------------------------------------------------

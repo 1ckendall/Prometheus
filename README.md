@@ -57,6 +57,11 @@ Nice-to-have items for upcoming releases, grouped by impact area.
 **Rocket performance:** frozen and shifting isentropic nozzle expansion with
 c\*, Isp (vacuum and sea-level), and area ratio.
 
+For shifting nozzle expansion, Prometheus supports configurable SP entropy
+bases: full-mixture entropy (default, best ProPEP/CEA parity), gas-only
+entropy, and an auto mode that retries gas-only if full-mixture SP does not
+converge.
+
 ## Installation
 
 ### Install from PyPI (recommended)

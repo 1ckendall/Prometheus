@@ -34,7 +34,7 @@ computed from combinations of the basic mixture properties.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -186,6 +186,11 @@ class EquilibriumSolution:
         return self.mixture.entropy(self.temperature, self.pressure)
 
     @property
+    def gas_entropy(self) -> float:
+        """Gas-phase molar entropy S_gas [J/(mol_gas·K)] at equilibrium T and P."""
+        return self.mixture.gas_entropy(self.temperature, self.pressure)
+
+    @property
     def gibbs(self) -> float:
         """Mixture Gibbs free energy G = H − T·S [J/mol]."""
         return self.enthalpy - self.temperature * self.entropy
@@ -306,6 +311,11 @@ class EquilibriumSolution:
     def total_entropy(self) -> float:
         """Total mixture entropy S_total = Σ nⱼ·Sⱼ_mix(T,P) [J/K]."""
         return self.mixture.total_entropy(self.temperature, self.pressure)
+
+    @property
+    def total_gas_entropy(self) -> float:
+        """Total gas-phase entropy Σⱼ∈gas nⱼ·Sⱼ_mix(T,P) [J/K]."""
+        return self.mixture.total_gas_entropy(self.temperature, self.pressure)
 
     # ------------------------------------------------------------------
     # Diagnostics

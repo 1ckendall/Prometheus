@@ -439,6 +439,10 @@ class _ReactionAdjustmentBase(EquilibriumSolver, ABC):
         history : List[ConvergenceStep]
         """
         constraint = problem.constraint1  # H₀ [J] for HP;  S₀ [J/K] for SP
+        sp_use_gas_entropy = (
+            problem.problem_type == ProblemType.SP
+            and getattr(problem, "sp_entropy_mode", "total") == "gas"
+        )
         P = problem.constraint2
         is_hp = problem.problem_type == ProblemType.HP
 
@@ -474,8 +478,12 @@ class _ReactionAdjustmentBase(EquilibriumSolver, ABC):
                 f = mixture.total_enthalpy(T) - constraint
                 fp = mixture.total_cp(T)
             else:
-                f = mixture.total_entropy(T, P) - constraint
-                fp = mixture.total_cp(T) / max(T, 1.0)
+                if sp_use_gas_entropy:
+                    f = mixture.total_gas_entropy(T, P) - constraint
+                    fp = mixture.total_gas_cp(T) / max(T, 1.0)
+                else:
+                    f = mixture.total_entropy(T, P) - constraint
+                    fp = mixture.total_cp(T) / max(T, 1.0)
 
             _dln_T = abs(f) / (T * abs(fp)) if abs(fp) > 1e-30 else float("inf")
 
@@ -2207,6 +2215,10 @@ class GordonMcBrideSolver(EquilibriumSolver):
             S,
             problem.problem_type.name,
         )
+        sp_use_gas_entropy = (
+            problem.problem_type == ProblemType.SP
+            and getattr(problem, "sp_entropy_mode", "total") == "gas"
+        )
 
         for n_inner in range(self.max_iterations):
             mixture, em = self._refresh_thermo_species_set(
@@ -2259,6 +2271,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
                 T,
                 P,
                 problem.problem_type,
+                sp_use_gas_entropy=sp_use_gas_entropy,
                 mu_gas=mu_gas,
                 H_gas=H_gas,
                 n_var=n_var,
@@ -2276,6 +2289,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
                     P,
                     problem.problem_type,
                     problem.constraint1,
+                    sp_use_gas_entropy=sp_use_gas_entropy,
                     mu_gas=mu_gas,
                     H_gas=H_gas,
                 )
@@ -2434,6 +2448,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
         T: float,
         P: float,
         problem_type: ProblemType,
+        sp_use_gas_entropy: bool = False,
         mu_gas: np.ndarray = None,
         H_gas: np.ndarray = None,
         n_var: float = None,
@@ -2617,6 +2632,13 @@ class GordonMcBrideSolver(EquilibriumSolver):
                 ]
             )
 
+            if sp_use_gas_entropy and nc > 0:
+                # Gas-only SP mode excludes condensed entropy/Cp from the
+                # entropy constraint row to avoid source-dependent condensed
+                # reference-state offsets during nozzle expansion.
+                S_cnd = np.zeros_like(S_cnd)
+                Cp_cnd_r = np.zeros_like(Cp_cnd_r)
+
             nS_gas = n_gas_arr * S_gas
             nH_gas = n_gas_arr * H_gas
 
@@ -2648,6 +2670,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
         P: float,
         problem_type: ProblemType,
         constraint_value: float,
+        sp_use_gas_entropy: bool = False,
         mu_gas: np.ndarray = None,
         H_gas: np.ndarray = None,
     ) -> None:
@@ -2714,19 +2737,19 @@ class GordonMcBrideSolver(EquilibriumSolver):
                     for i in range(mixture.n_condensed)
                 ]
             )
-            # product_entropy (dimensionless) = Σⱼ_gas nⱼ·Sⱼ_mix + Σⱼ_cnd nⱼ·S°ⱼ/R
-            product_S = float(n_gas_arr @ S_gas) + float(
-                mixture.condensed_moles() @ S_cnd_all
-            )
+            # product_entropy (dimensionless) = Σⱼ_gas nⱼ·Sⱼ_mix (+ condensed S°ⱼ/R in total mode)
+            product_S = float(n_gas_arr @ S_gas)
+            if not sp_use_gas_entropy:
+                product_S += float(mixture.condensed_moles() @ S_cnd_all)
             # F_entropy = S₀/R − product_entropy + n_total − n_gas + Σⱼ_gas nⱼ·Sⱼ_mix·μⱼ
             # (The n_total − n_gas term arises from the RP-1311 algebraic manipulation
             # of the entropy-balance linearisation; matches cpropep lines 575-588.)
             n_total = mixture.total_moles
+            correction_term = (n_total - n_gas_total) if not sp_use_gas_entropy else 0.0
             G[idx_T, -1] = (
                 constraint_value / _R
                 - product_S
-                + n_total
-                - n_gas_total
+                + correction_term
                 + float(n_gas_arr @ (S_gas * mu_gas))
             )
 

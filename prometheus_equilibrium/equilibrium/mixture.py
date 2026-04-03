@@ -315,6 +315,18 @@ class Mixture:
             s_gas += x_i * (sp.entropy(T) - R * np.log(x_i) - R * np.log(P / P_REF))
         return float(s_gas)
 
+    def total_gas_entropy(self, T: float, P: float = P_REF) -> float:
+        """Total gas-phase entropy Σⱼ∈gas nⱼ·Sⱼ_mix(T,P) [J/K].
+
+        This is the extensive gas-only entropy used for nozzle SP constraints
+        when condensed-phase entropy is intentionally excluded from isentropic
+        expansion modeling.
+        """
+        n_gas = self.total_gas_moles
+        if n_gas == 0.0:
+            return 0.0
+        return float(n_gas * self.gas_entropy(T, P))
+
     # ------------------------------------------------------------------
     # Extensive properties (used in energy-balance rows of the Jacobian)
     # ------------------------------------------------------------------
@@ -352,6 +364,14 @@ class Mixture:
         """
         cps = np.array([sp.specific_heat_capacity(T) for sp in self._species])
         return float(np.sum(self._moles * cps))
+
+    def total_gas_cp(self, T: float) -> float:
+        """Total gas-phase heat capacity Σⱼ∈gas nⱼ·Cpⱼ(T) [J/K]."""
+        n_gas = self.n_gas
+        if n_gas == 0:
+            return 0.0
+        cps = np.array([sp.specific_heat_capacity(T) for sp in self._species[:n_gas]])
+        return float(np.sum(self._moles[:n_gas] * cps))
 
     # ------------------------------------------------------------------
     # Log-space helpers (used by the Newton iteration)

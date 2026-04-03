@@ -125,12 +125,28 @@ propulsion textbooks.
 * Requires the database to correctly distinguish liquid from solid condensed
   entries for each species (see *Database Changes* below).
 * Phase-pairing logic needs a lookup mechanism in ``SpeciesDatabase``.
-* Latent heat is accounted for implicitly; a phase transition mid-expansion
-  produces a small discontinuity in temperature profile (physically real, but
-  may surprise users).
+
+**Calibration for database-independence** — when the replacement species comes
+from a different database than the outgoing species, their enthalpy and entropy
+reference states may differ.  The implementation wraps the replacement in a
+:class:`~prometheus_equilibrium.equilibrium.species.CalibratedSpecies` that
+applies constant H/S offsets computed at the transition boundary temperature
+T_tr:
+
+.. math::
+
+   \Delta h = H_{\text{old}}(T_{\text{tr}}) - H_{\text{new}}(T_{\text{tr}})
+
+   \Delta s = S_{\text{old}}(T_{\text{tr}}) - S_{\text{new}}(T_{\text{tr}})
+
+This ensures enthalpy and entropy are continuous at the phase boundary
+regardless of which database each phase originates from, eliminating the
+Isp sensitivity to database activation/deactivation.  ``Cp`` is not offset —
+the solid-phase Cp is used directly after transition, which is physically
+correct.
 
 **Verdict** — Recommended.  Best balance of physical correctness, numerical
-robustness, and compatibility with reference codes.
+robustness, and database-independence.
 
 Option 4 — Frozen Gas + Re-Equilibrated Condensed Phases
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -165,22 +181,32 @@ Replace ``s_target = chamber.entropy`` (total mixture) with
 ``mix.gas_entropy(T, P_target)`` only.  Condensed species still contribute to
 Cp and H through the ``mix.cp`` call.
 
-**Pros**
+.. note::
 
-* Gas isentropic path is exact.
-* Avoids the out-of-range entropy evaluation entirely.
+   This option was previously available via ``entropy_basis="gas_only"`` on
+   :class:`prometheus_equilibrium.equilibrium.performance.PerformanceSolver`
+   but has been removed.  The solver now always uses full-mixture entropy for
+   SP problems, with calibrated phase transitions (Option 3) ensuring
+   thermodynamic continuity at phase boundaries.
 
-**Cons**
+**Pros (for shifting nozzle modeling)**
 
-* Does not resolve the Cp evaluation issue: ``mix.cp(T)`` still calls
+* Matches the rocket-performance flow model in this package, which computes
+  nozzle density, sound speed, and thrust from gas-phase properties.
+* Reduces sensitivity of shifting predictions to condensed-species entropy
+  database differences (for example NASA-9 vs TERRA fallback for Al₂O₃).
+
+**Cons / scope limits**
+
+* By itself, this does **not** resolve frozen condensed thermo issues: ``mix.cp(T)`` still calls
   ``sp.specific_heat_capacity(T)`` on the liquid Al₂O₃ species at exit
   temperatures, returning zero and making ``ds_dT = cp/T`` vanish — the
   same INVALID_THERMO_PROPERTIES failure.
-* Introduces a thermodynamic inconsistency: condensed entropy is not conserved.
-  For 2.78 mol Al₂O₃ vs ~30 mol gas, this introduces a ~50–100 K error
-  in exit temperature.
+* Represents a gas-centered nozzle model, not a strict homogeneous-equilibrium
+  two-phase isentrope for the full gas+condensed mixture.
 
-**Verdict** — Does not fix the root cause; introduces a new inconsistency.
+**Verdict** — Appropriate for shifting nozzle performance modeling in this
+project; not sufficient as a standalone frozen condensed-phase robustness fix.
 
 Comparison Table
 ----------------
@@ -294,26 +320,32 @@ source (``uv run prometheus-build-all-thermo``).
 Solver Changes
 ~~~~~~~~~~~~~~
 
-``PerformanceSolver._solve_frozen_at_p`` is extended with a
-``_replace_out_of_range_condensed(mixture, T, db)`` step called at the start
-of each Newton iteration.  For each condensed species in the mixture:
+``PerformanceSolver._apply_phase_transitions`` is called at the start of each
+Newton iteration in ``_solve_frozen_at_p``.  For each condensed species in the
+mixture:
 
-1. Evaluate ``sp.specific_heat_capacity(T)``.  If the result is ``nan``, the
-   species polynomial is out of range at the current temperature.
-2. Call ``db.condensed_phase_partner(sp, T)`` to find a species with the same
+1. Evaluate ``sp.specific_heat_capacity(T)``.  If the result is ``nan`` or
+   non-positive, the species polynomial is out of range at the current T.
+2. Determine the transition boundary temperature T_tr (the nearest declared
+   boundary of the out-of-range polynomial).
+3. Call ``db.condensed_phase_partner(sp, T)`` to find a species with the same
    ``elements`` and ``condensed == 1`` whose temperature range contains ``T``.
-3. If a valid partner is found, replace the species object in the mixture while
-   conserving its mole count.  The partner is sourced from the same database
-   instance that was used to build the equilibrium problem.
+4. Compute H/S calibration offsets at T_tr and wrap the partner in a
+   :class:`~prometheus_equilibrium.equilibrium.species.CalibratedSpecies`
+   so that enthalpy and entropy are continuous at the boundary.
 
-A new ``SpeciesDatabase.condensed_phase_partner(species, T)`` method performs
-the lookup: it iterates over ``_all_species`` filtering by matching elements,
-``condensed == 1``, and a valid T-range check, returning the highest-priority
-match.
+``SpeciesDatabase.condensed_phase_partner`` performs the partner lookup,
+returning the highest-priority, widest-range match from ``_all_species``.
 
-This approach is robust to TERRA species (their Shomate polynomials cover the
-full range without returning nan) and to future additions of multi-step
-condensed phase sequences.
+The calibration step is what makes the approach database-independent: even if
+the liquid Al₂O₃ entry comes from NASA-7 and the solid comes from NASA-9 or
+TERRA, the H/S offset absorbs any reference-state difference so that the
+frozen Newton iteration sees a continuous thermodynamic surface.
+
+Shifting expansion SP solves always use full-mixture entropy (``total_entropy``),
+with no fallback to gas-only entropy.  The calibrated condensed thermo ensures
+that the SP Newton iteration can evaluate condensed entropy within its valid
+range throughout the expansion.
 
 References
 ----------

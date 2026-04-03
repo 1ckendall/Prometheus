@@ -1658,6 +1658,48 @@ class TERRACoeff(Species):
         return self.gibbs_free_energy(T_arr) / (R * T_arr)
 
 
+class CalibratedSpecies(Species):
+    """A condensed species with H/S offsets for thermodynamic continuity across a phase boundary.
+
+    When a frozen nozzle expansion crosses a condensed-phase boundary (e.g.
+    Al₂O₃ liquid → solid at the melting point), substituting the new phase
+    species directly would introduce a discontinuity in enthalpy and entropy
+    if the two species come from different databases with different reference
+    states.  This wrapper applies constant offsets ``Δh`` and ``Δs`` so that
+    ``enthalpy`` and ``entropy`` are continuous at the boundary temperature,
+    regardless of database source.
+
+    ``specific_heat_capacity`` delegates unmodified to the base species, so
+    the correct phase Cp (solid, not liquid) is used after the transition.
+
+    Args:
+        base: The replacement condensed species (e.g. solid Al₂O₃).
+        h_offset: Enthalpy offset Δh = H_old(T_tr) − H_base(T_tr) [J/mol].
+        s_offset: Entropy offset Δs = S_old(T_tr) − S_base(T_tr) [J/(mol·K)].
+    """
+
+    def __init__(self, base: "Species", h_offset: float, s_offset: float) -> None:
+        super().__init__(elements=base.elements, state=base.state, phase=base.phase)
+        self._base = base
+        self._h_offset = float(h_offset)
+        self._s_offset = float(s_offset)
+        # Carry over source attribution so database priority lookups still work
+        if hasattr(base, "source_attribution"):
+            self.source_attribution = base.source_attribution
+
+    def molar_mass(self) -> float:
+        return self._base.molar_mass()
+
+    def specific_heat_capacity(self, T):
+        return self._base.specific_heat_capacity(T)
+
+    def enthalpy(self, T):
+        return self._base.enthalpy(T) + self._h_offset
+
+    def entropy(self, T):
+        return self._base.entropy(T) + self._s_offset
+
+
 class SpeciesDatabase:
     """
     Loads thermodynamic species from multiple database formats and provides

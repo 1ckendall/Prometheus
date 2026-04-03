@@ -34,6 +34,26 @@ from prometheus_equilibrium.equilibrium.solver import (
     EquilibriumSolver,
     GordonMcBrideSolver,
 )
+from prometheus_equilibrium.equilibrium.species import CalibratedSpecies
+
+
+def _condensed_transition_temperature(species, T: float):
+    """Return the nearest boundary of *species*' polynomial validity range.
+
+    Used to find the calibration temperature T_tr when a condensed species'
+    polynomial is out of range at *T*.  Returns the lower boundary if
+    ``T < T_low``, the upper boundary if ``T > T_high``, or ``None`` if the
+    range cannot be determined.
+    """
+    if hasattr(species, "T_low") and hasattr(species, "T_high"):
+        # NASASevenCoeff
+        return species.T_low if T < species.T_low else species.T_high
+    if hasattr(species, "temperatures") and len(species.temperatures) >= 2:
+        # NASANineCoeff, ShomateCoeff
+        t_min = species.temperatures[0]
+        t_max = species.temperatures[-1]
+        return t_min if T < t_min else t_max
+    return None
 
 
 @dataclass
@@ -100,9 +120,21 @@ class PerformanceSolver:
             print(f"Isp = {result.shifting.isp_vac:.1f} m/s  (vacuum, shifting)")
     """
 
-    def __init__(self, solver: Optional[EquilibriumSolver] = None, db=None):
+    def __init__(
+        self,
+        solver: Optional[EquilibriumSolver] = None,
+        db=None,
+        sp_entropy_mode: str = "total_normalized",
+    ):
         self.solver = solver or GordonMcBrideSolver()
         self.db = db  # Optional SpeciesDatabase for condensed phase transitions
+        mode = str(sp_entropy_mode).strip().lower()
+        if mode not in ("total", "total_normalized"):
+            raise ValueError(
+                "sp_entropy_mode must be 'total' or 'total_normalized', "
+                f"got {sp_entropy_mode!r}."
+            )
+        self.sp_entropy_mode = mode
 
     def solve(
         self,
@@ -552,43 +584,257 @@ class PerformanceSolver:
         guess: Optional[EquilibriumSolution] = None,
         log_failure: bool = True,
     ) -> EquilibriumSolution:
-        """Solve for state at a given pressure, preserving entropy."""
+        """Solve for state at a given pressure with frozen or shifting constraints."""
         if shifting:
-            from prometheus_equilibrium.equilibrium.problem import (
-                EquilibriumProblem as EP,
-            )
-
-            # Map mixture species/moles to a dict for the problem constructor
-            reactant_dict = {
-                sp: n
-                for sp, n in zip(chamber.mixture.species, chamber.mixture.moles)
-                if n > 0
-            }
-
-            sp_prob = EP(
-                reactants=reactant_dict,
-                products=chamber.mixture.species,
-                problem_type=ProblemType.SP,
-                constraint1=chamber.total_entropy,
-                constraint2=p_target,
-                t_init=guess.temperature if guess else chamber.temperature * 0.8,
-            )
-            return self.solver.solve(
-                sp_prob,
-                guess=guess.mixture if guess else None,
+            if guess is None and chamber.pressure > 1.5 * p_target:
+                continuation_sol = self._solve_shifting_with_continuation(
+                    chamber,
+                    p_target,
+                    log_failure=log_failure,
+                )
+                if continuation_sol.converged:
+                    return continuation_sol
+                logger.warning(
+                    "Continuation SP solve did not converge at P={:.3e} Pa; retrying direct SP solve.",
+                    p_target,
+                )
+            return self._solve_shifting_sp_mode(
+                chamber,
+                p_target,
+                sp_entropy_mode=self.sp_entropy_mode,
+                guess=guess,
                 log_failure=log_failure,
             )
         else:
             # Frozen: fix composition at chamber values
             return self._solve_frozen_at_p(chamber, p_target)
 
+    def _solve_shifting_sp_mode(
+        self,
+        chamber: EquilibriumSolution,
+        p_target: float,
+        sp_entropy_mode: str,
+        guess: Optional[EquilibriumSolution],
+        log_failure: bool,
+        t_init_override: Optional[float] = None,
+    ) -> EquilibriumSolution:
+        """Solve one shifting SP state at fixed pressure using a specific entropy basis."""
+        from prometheus_equilibrium.equilibrium.problem import EquilibriumProblem as EP
+
+        chamber_mix = chamber.mixture
+        guess_mix = guess.mixture if guess else None
+        if sp_entropy_mode == "total_normalized":
+            species_map = self._build_condensed_entropy_normalization_map(
+                chamber_mix.species, reference_temperature=298.15
+            )
+            chamber_mix = self._remap_mixture_species(chamber_mix, species_map)
+            if guess_mix is not None:
+                guess_mix = self._remap_mixture_species(guess_mix, species_map)
+        else:
+            species_map = {}
+
+        reactant_dict = {
+            sp: n
+            for sp, n in zip(chamber_mix.species, chamber_mix.moles)
+            if n > 0
+        }
+        entropy_target = chamber_mix.total_entropy(chamber.temperature, chamber.pressure)
+        sp_prob = EP(
+            reactants=reactant_dict,
+            products=chamber_mix.species,
+            problem_type=ProblemType.SP,
+            constraint1=entropy_target,
+            constraint2=p_target,
+            t_init=(
+                float(t_init_override)
+                if t_init_override is not None
+                else (guess.temperature if guess else chamber.temperature * 0.8)
+            ),
+            sp_entropy_mode="total",
+        )
+        solution = self.solver.solve(
+            sp_prob,
+            guess=guess_mix,
+            log_failure=log_failure,
+        )
+        logger.debug(
+            "SP @P={:.3e} mode={} converged={} T={:.2f}K S_target={:.6e} normalized_condensed={}",
+            p_target,
+            sp_entropy_mode,
+            solution.converged,
+            solution.temperature,
+            entropy_target,
+            len(species_map),
+        )
+        return solution
+
+    def _solve_shifting_with_continuation(
+        self,
+        chamber: EquilibriumSolution,
+        p_target: float,
+        log_failure: bool,
+    ) -> EquilibriumSolution:
+        """March SP solution from chamber pressure to target pressure in small steps.
+
+        The continuation path improves branch stability near condensed phase
+        transitions for whole-flow entropy constraints.
+        """
+        n_steps = int(np.clip(math.ceil(math.log(chamber.pressure / p_target) / math.log(1.35)), 6, 30))
+        pressures = np.geomspace(chamber.pressure, p_target, n_steps + 1)[1:]
+
+        last = chamber
+        for idx, p_step in enumerate(pressures):
+            sol = self._solve_shifting_sp_mode(
+                chamber,
+                float(p_step),
+                sp_entropy_mode=self.sp_entropy_mode,
+                guess=last,
+                log_failure=False if idx < (len(pressures) - 1) else log_failure,
+            )
+            if not sol.converged:
+                return sol
+
+            if self._is_branch_jump(last, sol):
+                retry = self._retry_smooth_branch(
+                    chamber=chamber,
+                    p_target=float(p_step),
+                    reference=last,
+                    log_failure=False if idx < (len(pressures) - 1) else log_failure,
+                )
+                if retry is not None and retry.converged:
+                    if self._branch_distance(reference=last, candidate=retry) < self._branch_distance(reference=last, candidate=sol):
+                        logger.warning(
+                            "SP continuation branch guard selected alternate state at P={:.3e} Pa.",
+                            p_step,
+                        )
+                        sol = retry
+
+            last = sol
+        return last
+
+    @staticmethod
+    def _is_branch_jump(previous: EquilibriumSolution, current: EquilibriumSolution) -> bool:
+        """Return whether the current SP point shows a likely non-physical branch jump."""
+        if current.gas_mean_molar_mass <= previous.gas_mean_molar_mass:
+            return False
+        mass_ratio = current.gas_mean_molar_mass / max(previous.gas_mean_molar_mass, 1e-12)
+        temperature_drop = previous.temperature - current.temperature
+        return mass_ratio > 1.25 and temperature_drop > 120.0
+
+    @staticmethod
+    def _branch_distance(reference: EquilibriumSolution, candidate: EquilibriumSolution) -> float:
+        """Compute a smoothness score against the previous continuation point."""
+        mass_ratio = candidate.gas_mean_molar_mass / max(reference.gas_mean_molar_mass, 1e-12)
+        d_mass = abs(math.log(max(mass_ratio, 1e-12)))
+        d_temp = abs(candidate.temperature - reference.temperature) / max(reference.temperature, 1.0)
+        return d_mass + d_temp
+
+    def _retry_smooth_branch(
+        self,
+        chamber: EquilibriumSolution,
+        p_target: float,
+        reference: EquilibriumSolution,
+        log_failure: bool,
+    ) -> Optional[EquilibriumSolution]:
+        """Retry one pressure point with nearby temperature seeds and pick smoothest state."""
+        seeds = (
+            reference.temperature * 0.98,
+            reference.temperature * 1.00,
+            reference.temperature * 1.02,
+        )
+        best: Optional[EquilibriumSolution] = None
+        best_score = float("inf")
+
+        # Candidate family 1: reuse the previous shifting state with nearby T seeds.
+        for seed in seeds:
+            candidate = self._solve_shifting_sp_mode(
+                chamber,
+                p_target,
+                sp_entropy_mode=self.sp_entropy_mode,
+                guess=reference,
+                log_failure=log_failure,
+                t_init_override=seed,
+            )
+            if not candidate.converged:
+                continue
+            score = self._branch_distance(reference=reference, candidate=candidate)
+            if score < best_score:
+                best = candidate
+                best_score = score
+
+        # Candidate family 2: seed from frozen state to probe alternate whole-flow branch.
+        frozen_seed = self._solve_frozen_at_p(chamber, p_target)
+        frozen_seed.temperature = reference.temperature
+        for seed in seeds:
+            candidate = self._solve_shifting_sp_mode(
+                chamber,
+                p_target,
+                sp_entropy_mode=self.sp_entropy_mode,
+                guess=frozen_seed,
+                log_failure=log_failure,
+                t_init_override=seed,
+            )
+            if not candidate.converged:
+                continue
+            score = self._branch_distance(reference=reference, candidate=candidate)
+            if score < best_score:
+                best = candidate
+                best_score = score
+        return best
+
+    def _build_condensed_entropy_normalization_map(
+        self,
+        species,
+        reference_temperature: float,
+    ):
+        """Build a species remap that removes condensed absolute-entropy offsets.
+
+        This normalises each condensed species by setting its entropy to zero at
+        ``reference_temperature`` while preserving Cp(T) and h(T) slopes.
+        """
+        species_map = {}
+        for sp in species:
+            if sp.condensed == 0:
+                continue
+            s_ref = sp.entropy(reference_temperature)
+            if not math.isfinite(s_ref):
+                continue
+            species_map[sp] = CalibratedSpecies(sp, h_offset=0.0, s_offset=-s_ref)
+        return species_map
+
+    @staticmethod
+    def _remap_mixture_species(mix, species_map):
+        """Return a copy of ``mix`` with species replaced via ``species_map``."""
+        from prometheus_equilibrium.equilibrium.mixture import Mixture
+
+        if not species_map:
+            return mix.copy()
+        remapped_species = [species_map.get(sp, sp) for sp in mix.species]
+        return Mixture(remapped_species, mix.moles.copy())
+
     def _apply_phase_transitions(self, mix: "Mixture", T: float) -> "Mixture":
         """Replace condensed species whose thermo data is invalid at *T*.
 
         For each condensed species in *mix* whose Cp evaluates to nan or zero
         at *T*, looks up a phase partner in ``self.db`` valid at *T* and
-        substitutes it (conserving moles).  Returns the (possibly mutated)
-        mixture.  If ``self.db`` is None, returns *mix* unchanged.
+        substitutes a :class:`~prometheus_equilibrium.equilibrium.species.CalibratedSpecies`
+        that is enthalpy/entropy-continuous at the transition boundary,
+        regardless of the database source of each phase.
+
+        The calibration offsets are computed at the nearest boundary of the
+        out-of-range species' polynomial:
+
+        .. math::
+
+            \\Delta h = H_{\\text{old}}(T_{\\text{tr}}) - H_{\\text{new}}(T_{\\text{tr}})
+
+            \\Delta s = S_{\\text{old}}(T_{\\text{tr}}) - S_{\\text{new}}(T_{\\text{tr}})
+
+        This ensures that enthalpy and entropy are continuous at the phase
+        boundary so that the Newton iteration in ``_solve_frozen_at_p`` remains
+        consistent, even when the two phases come from databases with different
+        reference states.  ``Cp`` is not offset — the new phase's Cp is used
+        directly, which is the physically correct choice.
 
         Args:
             mix: Current mixture whose condensed species may need replacing.
@@ -596,7 +842,8 @@ class PerformanceSolver:
 
         Returns:
             The original *mix* if no substitutions were needed, otherwise a
-            new :class:`Mixture` with replacement species and the same moles.
+            new :class:`Mixture` with calibrated replacement species and the
+            same moles.
         """
         if self.db is None:
             return mix
@@ -607,9 +854,17 @@ class PerformanceSolver:
                 continue
             cp = sp.specific_heat_capacity(T)
             if not math.isfinite(cp) or cp <= 0.0:
+                # Find the base species to determine the transition boundary.
+                # CalibratedSpecies delegates Cp to its base, so OOR detection
+                # means the base is also OOR — use the base's boundary.
+                base_sp = sp._base if isinstance(sp, CalibratedSpecies) else sp
+                T_tr = _condensed_transition_temperature(base_sp, T)
+
                 partner = self.db.condensed_phase_partner(sp, T)
-                if partner is not None and partner is not sp:
-                    new_species[idx] = partner
+                if partner is not None and partner is not sp and T_tr is not None:
+                    h_offset = sp.enthalpy(T_tr) - partner.enthalpy(T_tr)
+                    s_offset = sp.entropy(T_tr) - partner.entropy(T_tr)
+                    new_species[idx] = CalibratedSpecies(partner, h_offset, s_offset)
                     changed = True
         if not changed:
             return mix

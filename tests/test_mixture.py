@@ -205,6 +205,21 @@ def test_gas_entropy_returns_zero_for_no_gas():
     assert mix.gas_entropy(1000.0, P_REF) == pytest.approx(0.0)
 
 
+
+def test_total_gas_entropy_matches_molar_times_gas_moles(mixture_env):
+    """total_gas_entropy should be n_gas * gas_entropy for mixed-phase systems."""
+    mix, T = mixture_env["mix"], mixture_env["T"]
+    expected = mix.total_gas_moles * mix.gas_entropy(T, P_REF)
+    assert mix.total_gas_entropy(T, P_REF) == pytest.approx(expected)
+
+
+def test_total_gas_cp_excludes_condensed_species(mixture_env):
+    """total_gas_cp should include only gas species contributions."""
+    mix, T = mixture_env["mix"], mixture_env["T"]
+    expected = (2.0 * 20.0) + (3.0 * 25.0)
+    assert mix.total_gas_cp(T) == pytest.approx(expected)
+
+
 def test_gibbs_equals_h_minus_ts(mixture_env):
     """Gibbs = H - T*S for the mixture."""
     mix, T = mixture_env["mix"], mixture_env["T"]
