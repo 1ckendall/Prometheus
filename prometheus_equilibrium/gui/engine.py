@@ -351,7 +351,9 @@ class EngineDock(QDockWidget):
         return value * _PA_PER_MPA
 
     @staticmethod
-    def _build_sweep_values(v_min: float, v_max: float, steps: int, axis: str) -> list[float]:
+    def _build_sweep_values(
+        v_min: float, v_max: float, steps: int, axis: str
+    ) -> list[float]:
         """Build exactly ``steps`` sweep values including both endpoints."""
         if steps < 2:
             raise ValueError(f"{axis} sweep steps must be >= 2.")
@@ -391,9 +393,7 @@ class EngineDock(QDockWidget):
         t_unit = self._temperature_display_unit()
         spec_kind = payload.get("spec_kind", "pressure")
         if spec_kind == "pressure":
-            expansion_spec = (
-                f"Pe target: {self._pressure_to_display(shifting.exit.pressure):.6f} {p_unit}"
-            )
+            expansion_spec = f"Pe target: {self._pressure_to_display(shifting.exit.pressure):.6f} {p_unit}"
         else:
             expansion_spec = f"Ae/At target: {payload.get('expansion_target', shifting.area_ratio):.3f}"
 
@@ -608,7 +608,9 @@ class EngineDock(QDockWidget):
                     of_min = float(sim_page.input_of_min.text())
                     of_max = float(sim_page.input_of_max.text())
                     of_steps = int(sim_page.input_of_steps.text())
-                    of_values = self._build_sweep_values(of_min, of_max, of_steps, "O/F")
+                    of_values = self._build_sweep_values(
+                        of_min, of_max, of_steps, "O/F"
+                    )
                 else:
                     of_values = [sim_page.input_of_ratio.value()]
 

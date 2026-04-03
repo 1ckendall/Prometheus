@@ -88,7 +88,9 @@ class _DummySolution:
 
 
 class _DummyPerfResult:
-    def __init__(self, chamber: _DummySolution, throat: _DummySolution, exit_: _DummySolution):
+    def __init__(
+        self, chamber: _DummySolution, throat: _DummySolution, exit_: _DummySolution
+    ):
         self.chamber = chamber
         self.throat = throat
         self.exit = exit_
@@ -212,5 +214,3 @@ def test_report_refresh_updates_units_after_calculation(dock):
     text_us = dock.main_window.page_analysis.results_text.toPlainText()
     assert "Temperature Unit: F" in text_us
     assert "Pressure Unit: PSI" in text_us
-
-

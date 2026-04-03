@@ -272,14 +272,18 @@ class EquilibriumSolver(ABC):
         are reintroduced with zero moles and can then grow through the Newton
         update.
         """
-        valid_species = [sp for sp in species_pool if math.isfinite(sp.reduced_gibbs(T))]
+        valid_species = [
+            sp for sp in species_pool if math.isfinite(sp.reduced_gibbs(T))
+        ]
         if not valid_species:
             raise RuntimeError(
                 f"No product species have valid thermodynamic data at T={T:.2f} K."
             )
 
         prev_moles = {sp: float(n) for sp, n in zip(mixture.species, mixture.moles)}
-        new_moles = np.array([prev_moles.get(sp, 0.0) for sp in valid_species], dtype=float)
+        new_moles = np.array(
+            [prev_moles.get(sp, 0.0) for sp in valid_species], dtype=float
+        )
 
         # Ensure at least one gas species has positive moles for log terms.
         n_gas = sum(1 for sp in valid_species if sp.condensed == 0)
@@ -291,7 +295,6 @@ class EquilibriumSolver(ABC):
         refreshed = Mixture(valid_species, new_moles)
         em = ElementMatrix(refreshed.species, active_elements)
         return refreshed, em
-
 
 
 # ---------------------------------------------------------------------------
@@ -2418,7 +2421,6 @@ class GordonMcBrideSolver(EquilibriumSolver):
                 last_step_norm if math.isfinite(last_step_norm) else float("inf")
             ),
         )
-
 
     # ------------------------------------------------------------------
     # Matrix assembly
