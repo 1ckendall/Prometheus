@@ -376,14 +376,16 @@ def test_h2o2_hp_temperature_vs_rocketcea():
 
 def test_apcp_frozen_expansion_converges():
     """Frozen nozzle expansion for APCP (Al-containing) must converge with phase substitution."""
-    import json
-
     from prometheus_equilibrium.propellants.loader import PropellantDatabase
 
     REPO_ROOT = Path(__file__).resolve().parents[1]
-    prop_file = REPO_ROOT / "basic_APCP.prop"
-    if not prop_file.exists():
-        pytest.skip("basic_APCP.prop not found at repo root")
+
+    # Keep this test self-contained: avoid depending on optional repo-root files.
+    components = [
+        ("AMMONIUM_PERCHLORATE", 0.68),
+        ("ALUMINUM_PURE_CRYSTALINE", 0.18),
+        ("HTPB_R_45HT", 0.14),
+    ]
 
     PSI_TO_PA = 6894.757
     chamber_pressure_pa = 1000.0 * PSI_TO_PA
@@ -397,10 +399,6 @@ def test_apcp_frozen_expansion_converges():
     )
     prop_db.load()
 
-    apcp_cfg = json.loads(prop_file.read_text(encoding="utf-8"))
-    components = [
-        (rec["name"], float(rec["mass_fraction"])) for rec in apcp_cfg["components"]
-    ]
     mixture = prop_db.mix(components)
 
     products = db.get_species(set(mixture.elements), max_atoms=20)

@@ -92,6 +92,7 @@ from loguru import logger
 
 from prometheus_equilibrium.core.constants import REFERENCE_PRESSURE as _P_REF
 from prometheus_equilibrium.core.constants import UNIVERSAL_GAS_CONSTANT as _R
+from prometheus_equilibrium.equilibrium.diagnostics import NonConvergenceReason
 from prometheus_equilibrium.equilibrium.element_matrix import ElementMatrix
 from prometheus_equilibrium.equilibrium.mixture import Mixture
 from prometheus_equilibrium.equilibrium.problem import EquilibriumProblem, ProblemType
@@ -256,6 +257,41 @@ class EquilibriumSolver(ABC):
             changed = True
 
         return changed
+
+    @staticmethod
+    def _refresh_thermo_species_set(
+        mixture: Mixture,
+        species_pool: List,
+        active_elements: List[str],
+        T: float,
+    ) -> Tuple[Mixture, ElementMatrix]:
+        """Rebuild active species to include all and only thermo-valid species at T.
+
+        Species with non-finite reduced Gibbs energy at the current temperature
+        are excluded for this Newton step. Species that become valid as T changes
+        are reintroduced with zero moles and can then grow through the Newton
+        update.
+        """
+        valid_species = [sp for sp in species_pool if math.isfinite(sp.reduced_gibbs(T))]
+        if not valid_species:
+            raise RuntimeError(
+                f"No product species have valid thermodynamic data at T={T:.2f} K."
+            )
+
+        prev_moles = {sp: float(n) for sp, n in zip(mixture.species, mixture.moles)}
+        new_moles = np.array([prev_moles.get(sp, 0.0) for sp in valid_species], dtype=float)
+
+        # Ensure at least one gas species has positive moles for log terms.
+        n_gas = sum(1 for sp in valid_species if sp.condensed == 0)
+        if n_gas == 0:
+            raise RuntimeError(f"No gas-phase species are thermo-valid at T={T:.2f} K.")
+        if float(np.sum(new_moles[:n_gas])) <= 0.0:
+            new_moles[:n_gas] = max(1e-12, 1.0 / n_gas)
+
+        refreshed = Mixture(valid_species, new_moles)
+        em = ElementMatrix(refreshed.species, active_elements)
+        return refreshed, em
+
 
 
 # ---------------------------------------------------------------------------
@@ -626,6 +662,7 @@ class PEPSolver(_ReactionAdjustmentBase):
         pi = np.zeros(em.n_elements)
         history = []
 
+        self._last_failure_reason = None
         if problem.problem_type.fixed_temperature:
             mixture, pi, n_iter, converged, history = self._tp_equilibrium(
                 mixture, em, b0, T, P
@@ -636,6 +673,17 @@ class PEPSolver(_ReactionAdjustmentBase):
             )
 
         residuals = em.element_residuals(mixture.moles, b0)
+        element_balance_error = (
+            float(np.max(np.abs(residuals))) if residuals.size else 0.0
+        )
+        failure_reason = None
+        if not converged:
+            failure_reason = (
+                self._last_failure_reason
+                if self._last_failure_reason is not None
+                else NonConvergenceReason.MAX_ITERATIONS_REACHED
+            )
+        last_step_norm = 0.0 if converged else float("inf")
 
         return EquilibriumSolution(
             mixture=mixture,
@@ -646,6 +694,9 @@ class PEPSolver(_ReactionAdjustmentBase):
             residuals=residuals,
             lagrange_multipliers=pi,
             history=history if self.capture_history else None,
+            failure_reason=failure_reason,
+            element_balance_error=element_balance_error,
+            last_step_norm=last_step_norm,
         )
 
     def _tp_equilibrium(
@@ -703,11 +754,13 @@ class PEPSolver(_ReactionAdjustmentBase):
             self._monatomic_init(mixture, em, b0, FLOOR)
 
         _log_pep = logger.bind(solver="PEP")
+        self._last_failure_reason = None
 
         # --- One-time basis selection (DEFIOJ) ---
         try:
             basis_indices, nonbasis_indices = em.select_basis(mixture.moles)
         except RuntimeError:
+            self._last_failure_reason = NonConvergenceReason.NO_BASIS_FOUND
             _log_pep.info("exit converged=False iters=0 T={:.1f} (no basis)", T)
             return mixture, pi, 0, False, history
 
@@ -1033,6 +1086,8 @@ class PEPSolver(_ReactionAdjustmentBase):
         _log_pep.info(
             "exit converged={} sweeps={} T={:.1f}", converged, total_sweeps, T
         )
+        if not converged and self._last_failure_reason is None:
+            self._last_failure_reason = NonConvergenceReason.MAX_ITERATIONS_REACHED
         return mixture, pi, total_sweeps, converged, history
 
     def _apply_stoich_update(
@@ -1428,6 +1483,8 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
         pi = np.zeros(em.n_elements)
         history = []
 
+        self._last_failure_reason = None
+        self._last_step_norm = float("inf")
         if problem.problem_type.fixed_temperature:
             mixture, pi, n_iter, converged, history = self._tp_equilibrium(
                 mixture, em, b0, T, P
@@ -1438,6 +1495,19 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
             )
 
         residuals = em.element_residuals(mixture.moles, b0)
+        element_balance_error = (
+            float(np.max(np.abs(residuals))) if residuals.size else 0.0
+        )
+        failure_reason = None
+        if not converged:
+            failure_reason = (
+                self._last_failure_reason
+                if self._last_failure_reason is not None
+                else NonConvergenceReason.MAX_ITERATIONS_REACHED
+            )
+        last_step_norm = float(self._last_step_norm)
+        if converged and not math.isfinite(last_step_norm):
+            last_step_norm = 0.0
 
         return EquilibriumSolution(
             mixture=mixture,
@@ -1448,6 +1518,9 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
             residuals=residuals,
             lagrange_multipliers=pi,
             history=history if self.capture_history else None,
+            failure_reason=failure_reason,
+            element_balance_error=element_balance_error,
+            last_step_norm=last_step_norm,
         )
 
     def _tp_equilibrium(
@@ -1478,6 +1551,8 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
         history: List[ConvergenceStep] = []
 
         _log_hyb = logger.bind(solver="MajorSpecies")
+        self._last_failure_reason = None
+        self._last_step_norm = float("inf")
         n_inner = 0
         _tp_converged = False
         for n_inner in range(self.max_iterations):
@@ -1591,6 +1666,7 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
                     phase_changed_counter += 1
                     if phase_changed_counter <= 3 * S:
                         continue
+                self._last_failure_reason = NonConvergenceReason.SINGULAR_JACOBIAN
                 break
 
             # --- 4. Extract unknowns and apply damped update ---
@@ -1642,6 +1718,21 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
                 len(major_gas_indices),
                 len(minor_gas_indices),
             )
+
+            # Keep the same step metric used by the convergence criterion.
+            _step_norm = max(
+                max(
+                    (
+                        abs(mixture.moles[idx] * d_i)
+                        / max(float(mixture.gas_moles().sum()), 1e-300)
+                        for idx, d_i in zip(major_gas_indices, delta_ln_nj_maj)
+                        if mixture.moles[idx] > 0.0
+                    ),
+                    default=0.0,
+                ),
+                abs(float(delta_ln_n)),
+            )
+            self._last_step_norm = float(_step_norm)
             if self._check_convergence(
                 mixture, delta_ln_nj_maj, major_gas_indices, delta_ln_n, element_res
             ):
@@ -1651,6 +1742,12 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
 
         else:
             _log_hyb.info("exit converged=False iters={} T={:.1f}", n_inner + 1, T)
+
+        if not _tp_converged and self._last_failure_reason is None:
+            if phase_changed_counter > 3 * S:
+                self._last_failure_reason = NonConvergenceReason.CONDENSED_PHASE_CYCLING
+            else:
+                self._last_failure_reason = NonConvergenceReason.MAX_ITERATIONS_REACHED
 
         # Final exact update: set every gas species to its analytical
         # equilibrium value from the converged π.
@@ -2088,6 +2185,8 @@ class GordonMcBrideSolver(EquilibriumSolver):
 
         pi = np.zeros(em.n_elements)  # element potentials (re-solved each step)
         converged = False
+        failure_reason = None
+        last_step_norm = float("inf")
         n_inner = 0
         S = em.n_elements  # constant throughout the loop
         is_tp = problem.problem_type == ProblemType.TP  # constant throughout
@@ -2120,6 +2219,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
             A_gas = em.gas_rows()
 
             if n_gas_total <= 0:
+                failure_reason = NonConvergenceReason.GAS_MOLES_COLLAPSED
                 _log.error("Gas moles collapsed to zero at iteration {}", n_inner)
                 break
 
@@ -2185,6 +2285,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
                 if self._manage_condensed_phases(mixture, em, pi, T):
                     _log.info("Attempting to recover by changing condensed phases...")
                     continue
+                failure_reason = NonConvergenceReason.SINGULAR_JACOBIAN
                 break  # nothing more we can do
 
             # ---- extract unknowns from delta_x ----
@@ -2228,6 +2329,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
             )
             if self._should_capture_history(n_inner) and history:
                 history[-1].max_residual = _max_crit
+            last_step_norm = float(_max_crit)
 
             _log.debug(
                 "iter={:3d} T={:9.2f} lam={:.4f} dlnT={:.3e} dlnn={:.3e}",
@@ -2294,7 +2396,13 @@ class GordonMcBrideSolver(EquilibriumSolver):
                     T,
                 )
 
+        if not converged and failure_reason is None:
+            failure_reason = NonConvergenceReason.MAX_ITERATIONS_REACHED
+
         residuals = em.element_residuals(mixture.moles, b0)
+        element_balance_error = (
+            float(np.max(np.abs(residuals))) if residuals.size else 0.0
+        )
         return EquilibriumSolution(
             mixture=mixture,
             temperature=T,
@@ -2304,45 +2412,13 @@ class GordonMcBrideSolver(EquilibriumSolver):
             residuals=residuals,
             lagrange_multipliers=pi,
             history=history if self.capture_history else None,
+            failure_reason=None if converged else failure_reason,
+            element_balance_error=element_balance_error,
+            last_step_norm=(
+                last_step_norm if math.isfinite(last_step_norm) else float("inf")
+            ),
         )
 
-    @staticmethod
-    def _refresh_thermo_species_set(
-        mixture: Mixture,
-        species_pool: List,
-        active_elements: List[str],
-        T: float,
-    ) -> Tuple[Mixture, ElementMatrix]:
-        """Rebuild active species to include all and only thermo-valid species at T.
-
-        Species with non-finite reduced Gibbs energy at the current temperature
-        are excluded for this Newton step. Species that become valid as T changes
-        are reintroduced with zero moles and can then grow through the Newton
-        update.
-        """
-        valid_species = [
-            sp for sp in species_pool if math.isfinite(sp.reduced_gibbs(T))
-        ]
-        if not valid_species:
-            raise RuntimeError(
-                f"No product species have valid thermodynamic data at T={T:.2f} K."
-            )
-
-        prev_moles = {sp: float(n) for sp, n in zip(mixture.species, mixture.moles)}
-        new_moles = np.array(
-            [prev_moles.get(sp, 0.0) for sp in valid_species], dtype=float
-        )
-
-        # Ensure at least one gas species has positive moles for log terms.
-        n_gas = sum(1 for sp in valid_species if sp.condensed == 0)
-        if n_gas == 0:
-            raise RuntimeError(f"No gas-phase species are thermo-valid at T={T:.2f} K.")
-        if float(np.sum(new_moles[:n_gas])) <= 0.0:
-            new_moles[:n_gas] = max(1e-12, 1.0 / n_gas)
-
-        refreshed = Mixture(valid_species, new_moles)
-        em = ElementMatrix(refreshed.species, active_elements)
-        return refreshed, em
 
     # ------------------------------------------------------------------
     # Matrix assembly

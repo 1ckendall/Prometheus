@@ -1,3 +1,5 @@
+import traceback
+
 from loguru import logger
 from PySide6.QtCore import QLocale, Qt, QThread, Signal
 from PySide6.QtGui import QDoubleValidator, QIntValidator
@@ -11,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -28,7 +31,7 @@ _PA_PER_PSI = 6894.757
 
 
 class SolverWorker(QThread):
-    finished = Signal(object)  # EquilibriumSolution or Exception string
+    finished = Signal(object)  # dict payload
 
     def __init__(self, problem, solver):
         super().__init__()
@@ -39,14 +42,21 @@ class SolverWorker(QThread):
         try:
             logger.info(f"Starting solver on background thread...")
             solution = self.solver.solve(self.problem)
-            self.finished.emit(solution)
+            self.finished.emit({"ok": True, "solution": solution})
         except Exception as e:
             logger.exception("Solver thread encountered an unhandled exception")
-            self.finished.emit(str(e))
+            self.finished.emit(
+                {
+                    "ok": False,
+                    "message": str(e),
+                    "traceback": traceback.format_exc(),
+                }
+            )
 
 
 class PerformanceWorker(QThread):
-    finished = Signal(object)  # dict payload or Exception string
+    finished = Signal(object)  # dict payload
+    progress = Signal(int, int, str)  # done, total, label
 
     def __init__(
         self,
@@ -70,12 +80,15 @@ class PerformanceWorker(QThread):
         self.perf_solver = PerformanceSolver(solver, db=spec_db)
 
     def run(self):
+        cases = []
+        total = len(self.jobs)
         try:
             logger.info("Starting dual-mode performance solver on background thread...")
             pe_pa = self.exit_value if self.is_pressure else None
             area_ratio = self.exit_value if not self.is_pressure else None
-            cases = []
-            for sweep_value, problem in self.jobs:
+            self.progress.emit(0, total, "Starting")
+            for i, (sweep_value, problem) in enumerate(self.jobs, start=1):
+                self.progress.emit(i - 1, total, f"Case {i}/{total}")
                 pair = self.perf_solver.solve_pair(
                     problem,
                     pe_pa=pe_pa,
@@ -83,8 +96,10 @@ class PerformanceWorker(QThread):
                     ambient_pressure=self.ambient_pressure,
                 )
                 cases.append((sweep_value, pair))
+                self.progress.emit(i, total, f"Case {i}/{total}")
             self.finished.emit(
                 {
+                    "ok": True,
                     "cases": cases,
                     "ambient_pressure": self.ambient_pressure,
                     "sweep_axis": self.sweep_axis,
@@ -95,7 +110,17 @@ class PerformanceWorker(QThread):
             logger.exception(
                 "Performance solver thread encountered an unhandled exception"
             )
-            self.finished.emit(str(e))
+            self.finished.emit(
+                {
+                    "ok": False,
+                    "message": str(e),
+                    "traceback": traceback.format_exc(),
+                    "cases": cases,
+                    "ambient_pressure": self.ambient_pressure,
+                    "sweep_axis": self.sweep_axis,
+                    "sweep_label": self.sweep_label,
+                }
+            )
 
 
 class EngineDock(QDockWidget):
@@ -245,6 +270,14 @@ class EngineDock(QDockWidget):
         btn_layout.addWidget(self.btn_calculate, stretch=2)
         layout.addLayout(btn_layout)
 
+        self.run_progress_label = QLabel("")
+        self.run_progress_bar = QProgressBar()
+        self.run_progress_bar.setTextVisible(True)
+        self.run_progress_label.hide()
+        self.run_progress_bar.hide()
+        layout.addWidget(self.run_progress_label)
+        layout.addWidget(self.run_progress_bar)
+
         layout.addStretch()
         self.setWidget(dock_contents)
 
@@ -320,6 +353,42 @@ class EngineDock(QDockWidget):
     def update_actual_of(self):
         # Forward to simulator page if needed, or update here
         pass
+
+    def _render_error_report(self, title: str, message: str, tb: str = "") -> None:
+        report = [
+            f"=== {title} ===",
+            "",
+            f"Message: {message}",
+        ]
+        if tb:
+            report.extend(["", "Traceback:", tb])
+        self.main_window.page_analysis.results_text.setText("\n".join(report))
+
+    def _start_run_progress(self, total_cases: int) -> None:
+        self.run_progress_label.show()
+        self.run_progress_bar.show()
+        if total_cases <= 1:
+            self.run_progress_label.setText("Calculating single point...")
+            self.run_progress_bar.setRange(0, 0)
+            self.run_progress_bar.setFormat("Working...")
+        else:
+            self.run_progress_label.setText(f"Running sweep: 0/{total_cases}")
+            self.run_progress_bar.setRange(0, total_cases)
+            self.run_progress_bar.setValue(0)
+            self.run_progress_bar.setFormat("%v/%m")
+
+    def _update_run_progress(self, done: int, total: int, label: str) -> None:
+        if total <= 1:
+            self.run_progress_label.setText("Calculating single point...")
+            return
+        self.run_progress_label.setText(f"Running sweep: {done}/{total}")
+        self.run_progress_bar.setRange(0, total)
+        self.run_progress_bar.setValue(done)
+        self.run_progress_bar.setFormat(label if label else "%v/%m")
+
+    def _finish_run_progress(self) -> None:
+        self.run_progress_label.hide()
+        self.run_progress_bar.hide()
 
     def on_calculate(self):
         logger.info("Calculate button clicked.")
@@ -573,12 +642,31 @@ class EngineDock(QDockWidget):
             sweep_axis=sweep_axis,
             sweep_label=sweep_label,
         )
+        self._start_run_progress(len(jobs))
+        self.worker.progress.connect(self._update_run_progress)
         self.worker.finished.connect(self.on_perf_finished)
         self.worker.start()
 
     def on_perf_finished(self, result):
+        self._finish_run_progress()
         self.btn_calculate.setEnabled(True)
         self.btn_calculate.setText("Calculate")
+
+        if isinstance(result, dict) and result.get("ok") is False:
+            msg = result.get("message", "Unknown performance error")
+            tb = result.get("traceback", "")
+            self.res_tc.setText("ERROR")
+            self.main_window.statusBar().showMessage(f"Performance Error: {msg}", 12000)
+            self._render_error_report("Performance Solver Error", msg, tb)
+            return
+
+        if isinstance(result, str):
+            self.res_tc.setText("ERROR")
+            self.main_window.statusBar().showMessage(
+                f"Performance Error: {result}", 12000
+            )
+            self._render_error_report("Performance Solver Error", result)
+            return
 
         payload = result if isinstance(result, dict) else {"cases": [(None, result)]}
         cases = payload.get("cases", [])
@@ -587,9 +675,20 @@ class EngineDock(QDockWidget):
         if not cases:
             self.res_tc.setText("ERROR")
             self.main_window.statusBar().showMessage("No results returned.", 10000)
+            self._render_error_report(
+                "Performance Solver Error", "No results returned."
+            )
             return
 
         _, perf = cases[0]
+        if isinstance(perf, str):
+            self.res_tc.setText("ERROR")
+            self.main_window.statusBar().showMessage(
+                f"Performance Error: {perf}", 12000
+            )
+            self._render_error_report("Performance Solver Error", perf)
+            return
+
         perf: RocketPerformanceComparison
         shifting = perf.shifting
         frozen = perf.frozen
@@ -686,22 +785,33 @@ class EngineDock(QDockWidget):
 
         else:
             self.res_tc.setText("FAIL")
-            self.main_window.statusBar().showMessage(
-                "Performance solve failed to converge.", 5000
-            )
+            fail_msg = "Performance solve failed to converge."
+            self.main_window.statusBar().showMessage(fail_msg, 5000)
+            self._render_error_report("Performance Solver Failure", fail_msg)
 
     def on_solve_finished(self, result):
+        self._finish_run_progress()
         self.btn_calculate.setEnabled(True)
         self.btn_calculate.setText("Calculate")
 
-        if isinstance(result, str):
-            # Error
+        if isinstance(result, dict):
+            if not result.get("ok", False):
+                msg = result.get("message", "Unknown solver error")
+                tb = result.get("traceback", "")
+                self.res_tc.setText("ERROR")
+                self.main_window.statusBar().showMessage(f"Solver Error: {msg}", 10000)
+                self._render_error_report("Equilibrium Solver Error", msg, tb)
+                return
+            sol = result.get("solution")
+        elif isinstance(result, str):
             self.res_tc.setText("ERROR")
             self.main_window.statusBar().showMessage(f"Solver Error: {result}", 10000)
+            self._render_error_report("Equilibrium Solver Error", result)
             return
+        else:
+            sol = result
 
         # Success
-        sol = result
         if sol.converged:
             self.res_tc.setText(f"{sol.temperature:.1f}")
             # Approximate c* (assuming frozen gamma for display)
@@ -746,4 +856,6 @@ class EngineDock(QDockWidget):
 
         else:
             self.res_tc.setText("FAIL")
-            self.main_window.statusBar().showMessage("Solver failed to converge.", 5000)
+            fail_msg = "Solver failed to converge."
+            self.main_window.statusBar().showMessage(fail_msg, 5000)
+            self._render_error_report("Equilibrium Solver Failure", fail_msg)
