@@ -152,6 +152,12 @@ class PerformanceSolver:
             f"Starting performance calculation ({'Shifting' if shifting else 'Frozen'})"
         )
 
+        # Store the full product species list from the original problem so that
+        # the shifting SP solver can include species that are thermo-invalid at
+        # the chamber temperature but become valid at lower expansion temps
+        # (e.g. solid Al2O3 valid 300-2327K, excluded at chamber T ~3300K).
+        self._full_products = list(problem.products)
+
         # 1. Chamber Solve (HP)
         chamber = self.solver.solve(problem)
         if not chamber.converged:
@@ -623,15 +629,26 @@ class PerformanceSolver:
 
         chamber_mix = chamber.mixture
         guess_mix = guess.mixture if guess else None
+
+        # Use the full product list from the original HP problem so that
+        # species valid only at lower temperatures (e.g. solid Al2O3, valid
+        # 300-2327K) can be reintroduced by the solver as T drops during
+        # nozzle expansion.  Without this, the chamber solve (at ~3300K)
+        # excludes low-T condensed species and the shifting solver cannot
+        # condense them at exit conditions.
+        full_products = getattr(self, "_full_products", None) or chamber_mix.species
+
         if sp_entropy_mode == "total_normalized":
             species_map = self._build_condensed_entropy_normalization_map(
-                chamber_mix.species, reference_temperature=298.15
+                full_products, reference_temperature=298.15
             )
             chamber_mix = self._remap_mixture_species(chamber_mix, species_map)
             if guess_mix is not None:
                 guess_mix = self._remap_mixture_species(guess_mix, species_map)
+            sp_products = [species_map.get(sp, sp) for sp in full_products]
         else:
             species_map = {}
+            sp_products = list(full_products)
 
         reactant_dict = {
             sp: n
@@ -641,7 +658,7 @@ class PerformanceSolver:
         entropy_target = chamber_mix.total_entropy(chamber.temperature, chamber.pressure)
         sp_prob = EP(
             reactants=reactant_dict,
-            products=chamber_mix.species,
+            products=sp_products,
             problem_type=ProblemType.SP,
             constraint1=entropy_target,
             constraint2=p_target,

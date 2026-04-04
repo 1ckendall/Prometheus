@@ -342,10 +342,33 @@ the liquid Al₂O₃ entry comes from NASA-7 and the solid comes from NASA-9 or
 TERRA, the H/S offset absorbs any reference-state difference so that the
 frozen Newton iteration sees a continuous thermodynamic surface.
 
+Shifting Expansion: Full Product Species Pool
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 Shifting expansion SP solves always use full-mixture entropy (``total_entropy``),
 with no fallback to gas-only entropy.  The calibrated condensed thermo ensures
 that the SP Newton iteration can evaluate condensed entropy within its valid
 range throughout the expansion.
+
+A second database-independence issue affects the shifting solver.  The chamber
+HP equilibrium is solved at ~3300 K, so the Gordon-McBride solver's
+``_refresh_thermo_species_set`` excludes species with invalid thermo data at
+that temperature — including solid Al₂O₃ (e.g. NASA-9 ``Al2O3_S``, valid
+300–2327 K).  When the SP expansion cools to exit temperatures below 2327 K,
+the solver needs solid Al₂O₃ to condense, but it was never in the product list.
+
+With TERRA loaded, TERRA's ``Al2O3_S`` (298–6000 K) covers the entire range
+and is never excluded.  Without TERRA, the solid species is missing and
+condensed Al₂O₃ disappears entirely at the exit plane, causing the gas mean
+molar mass to jump from ~19 to ~28 g/mol and the Isp to drop by ~20%.
+
+**Fix:** ``PerformanceSolver._solve_shifting_sp_mode`` now passes the *full*
+original product species list (from the HP problem) to the SP solver, rather
+than only the chamber mixture species.  The Gordon-McBride solver's
+``_refresh_thermo_species_set`` can then reintroduce low-temperature species
+as the iteration temperature drops below their validity threshold.  This
+ensures that solid Al₂O₃ is available at exit conditions regardless of which
+databases are loaded.
 
 References
 ----------

@@ -561,3 +561,70 @@ def test_apcp_frozen_expansion_converges():
     if o_chamber > 0:
         o_rel_err = abs(o_exit - o_chamber) / o_chamber
         assert o_rel_err < 1e-6, f"O element balance error: {o_rel_err:.2e}"
+
+
+# ---------------------------------------------------------------------------
+# 7. Shifting expansion database independence (condensed species)
+# ---------------------------------------------------------------------------
+
+
+def test_shifting_condensed_species_available_without_terra():
+    """Shifting expansion must retain condensed Al2O3 even without TERRA.
+
+    The chamber solve at ~3300K excludes solid Al2O3 (valid 300-2327K)
+    from the mixture because its thermo data is invalid at that
+    temperature.  The shifting SP solver must still be able to condense
+    solid Al2O3 at exit temperatures below 2327K by drawing from the
+    full original product species list, not just the chamber mixture.
+    """
+    from prometheus_equilibrium.propellants.loader import PropellantDatabase
+
+    REPO_ROOT = Path(__file__).resolve().parents[1]
+
+    components = [
+        ("AMMONIUM_PERCHLORATE", 0.68),
+        ("ALUMINUM_PURE_CRYSTALINE", 0.18),
+        ("HTPB_R_45HT", 0.14),
+    ]
+
+    PSI_TO_PA = 6894.757
+    chamber_pressure_pa = 1000.0 * PSI_TO_PA
+
+    # Load WITHOUT TERRA to test database independence
+    db = SpeciesDatabase()
+    db.load(include_janaf=False, include_terra=False, include_afcesic=False)
+
+    prop_db = PropellantDatabase(
+        str(REPO_ROOT / "prometheus_equilibrium" / "propellants" / "propellants.toml"),
+        species_db=db,
+    )
+    prop_db.load()
+
+    mixture = prop_db.mix(components)
+    products = db.get_species(set(mixture.elements), max_atoms=20)
+
+    problem = EquilibriumProblem(
+        reactants=mixture.reactants,
+        products=products,
+        problem_type=ProblemType.HP,
+        constraint1=mixture.enthalpy,
+        constraint2=chamber_pressure_pa,
+        t_init=3500.0,
+    )
+
+    solver = GordonMcBrideSolver(max_iterations=120)
+    perf_solver = PerformanceSolver(solver, db=db)
+    result = perf_solver.solve(problem, pe_pa=101325.0, shifting=True)
+
+    assert result.exit.converged, (
+        f"Shifting exit did not converge: {result.exit.failure_reason}"
+    )
+
+    # The exit gas mean molar mass should reflect condensed Al2O3 presence.
+    # Without the fix, M̄ jumps to ~27.7 (gas-only); with condensed Al2O3
+    # it should be ~19-20 g/mol.
+    exit_mbar = result.exit.gas_mean_molar_mass * 1000  # kg/mol → g/mol
+    assert exit_mbar < 22.0, (
+        f"Exit gas M̄ = {exit_mbar:.1f} g/mol — condensed Al2O3 likely missing "
+        f"(expected ~19-20 with condensed phase)"
+    )
