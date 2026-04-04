@@ -27,7 +27,9 @@ from typing import List, Optional
 import numpy as np
 from loguru import logger
 
+from prometheus_equilibrium.core.constants import UNIVERSAL_GAS_CONSTANT as _R
 from prometheus_equilibrium.equilibrium.diagnostics import NonConvergenceReason
+from prometheus_equilibrium.equilibrium.element_matrix import ElementMatrix
 from prometheus_equilibrium.equilibrium.problem import EquilibriumProblem, ProblemType
 from prometheus_equilibrium.equilibrium.solution import EquilibriumSolution
 from prometheus_equilibrium.equilibrium.solver import (
@@ -558,9 +560,9 @@ class PerformanceSolver:
         return last_sol
 
     def _find_throat_frozen(self, chamber: EquilibriumSolution) -> EquilibriumSolution:
-        """Legacy binary search for frozen throat (fast)."""
-        p_low = 0.3 * chamber.pressure
-        p_high = 0.9 * chamber.pressure
+        """Binary search for frozen throat (fast warm-start for shifting solver)."""
+        p_low = 0.1 * chamber.pressure
+        p_high = 0.98 * chamber.pressure
 
         def get_mach(p):
             sol = self._solve_frozen_at_p(chamber, p)
@@ -568,7 +570,15 @@ class PerformanceSolver:
             v = math.sqrt(max(0.0, 2 * dH_mass))
             return v / sol.speed_of_sound, sol
 
-        p_t = 0.55 * chamber.pressure
+        # Initial estimate from RP-1311 Eq. 6.15: P_t = P_c / ((γ/2+0.5)^(γ/(γ-1)))
+        g = chamber.gamma
+        try:
+            _exp = g / (g - 1.0)
+            p_t_est = chamber.pressure / ((g / 2.0 + 0.5) ** _exp)
+        except (ZeroDivisionError, OverflowError):
+            p_t_est = 0.55 * chamber.pressure
+        p_t = max(p_low, min(p_high, p_t_est))
+
         last_sol = chamber
         for _ in range(20):
             mach, sol = get_mach(p_t)
@@ -674,14 +684,20 @@ class PerformanceSolver:
             guess=guess_mix,
             log_failure=log_failure,
         )
+        if solution.converged:
+            gs = self._compute_gamma_s(solution)
+            if gs is not None:
+                solution.gamma_s = gs
+
         logger.debug(
-            "SP @P={:.3e} mode={} converged={} T={:.2f}K S_target={:.6e} normalized_condensed={}",
+            "SP @P={:.3e} mode={} converged={} T={:.2f}K S_target={:.6e} normalized_condensed={} gamma_s={}",
             p_target,
             sp_entropy_mode,
             solution.converged,
             solution.temperature,
             entropy_target,
             len(species_map),
+            solution.gamma_s,
         )
         return solution
 
@@ -888,6 +904,119 @@ class PerformanceSolver:
         from prometheus_equilibrium.equilibrium.mixture import Mixture
 
         return Mixture(new_species, mix.moles.copy())
+
+    @staticmethod
+    def _compute_gamma_s(solution: EquilibriumSolution) -> Optional[float]:
+        """Compute the equilibrium isentropic exponent γₛ (NASA RP-1311 §2.5).
+
+        Solves two auxiliary linear systems (const-P and const-T sensitivities)
+        sharing the same (ne+1)×(ne+1) Jacobian built from the converged gas-
+        phase species.  Condensed phases are excluded from the compressibility
+        calculation per the standard ideal-gas assumption for nozzle flow.
+
+        Returns ``None`` if the system is underdetermined (no gas species,
+        singular Jacobian, or non-finite thermo values).  The caller should
+        fall back to the frozen γ in that case.
+
+        Args:
+            solution: Converged SP equilibrium solution.
+
+        Returns:
+            γₛ > 1 (equilibrium isentropic exponent), or ``None``.
+        """
+        mix = solution.mixture
+        T = solution.temperature
+        n_gas = mix.n_gas
+        if n_gas == 0:
+            return None
+
+        n_gas_arr = mix.gas_moles()           # shape (n_gas,)
+        n_gas_total = float(n_gas_arr.sum())
+        if n_gas_total <= 0.0:
+            return None
+
+        # Build the stoichiometric matrix using only the full mixture
+        # (Mixture keeps gas before condensed, so gas_rows() is safe).
+        em = ElementMatrix.from_mixture(mix)
+        A_gas = em.gas_rows()                 # (n_gas, ne)
+        ne = A_gas.shape[1]
+
+        # Dimensionless enthalpies h_j = H_j(T)/(R·T)
+        h_gas = np.array([
+            sp.reduced_enthalpy(T) for sp in mix.species[:n_gas]
+        ])
+        if not np.all(np.isfinite(h_gas)):
+            return None
+
+        # ---- Build (ne+1)×(ne+1) Jacobian (RP-1311 Tables 2.3/2.4) ----
+        # J[:ne, :ne] = A_gas.T @ diag(n_gas) @ A_gas   (element-element)
+        # J[:ne, ne] = J[ne, :ne] = A_gas.T @ n_gas      (element–Δln(n))
+        # J[ne, ne] = 0  (diagonal for Δln(n) row is zero in CEA's formulation)
+        J = np.zeros((ne + 1, ne + 1))
+        J[:ne, :ne] = A_gas.T @ (n_gas_arr[:, None] * A_gas)
+        col = A_gas.T @ n_gas_arr             # shape (ne,)
+        J[:ne, ne] = col
+        J[ne, :ne] = col
+        # J[ne, ne] = 0.0 already (from np.zeros)
+
+        cond = np.linalg.cond(J)
+        if not math.isfinite(cond) or cond > 1e12:
+            return None
+
+        # ---- Const-P RHS (∂/∂lnT at const P, RP-1311 Table 2.3) ----
+        # rhs_p[i] = -Σⱼ nⱼ·Aᵢⱼ·hⱼ   for element row i
+        # rhs_p[ne] = -Σⱼ nⱼ·hⱼ         for total-moles row
+        rhs_p = np.zeros(ne + 1)
+        rhs_p[:ne] = -(A_gas.T @ (n_gas_arr * h_gas))
+        rhs_p[ne] = -float(n_gas_arr @ h_gas)
+
+        # ---- Const-T RHS (∂/∂lnP at const T, RP-1311 Table 2.4) ----
+        # rhs_t[:ne] = A_gas.T @ n_gas  (element abundances)
+        # rhs_t[ne]  = n_gas_total
+        rhs_t = np.zeros(ne + 1)
+        rhs_t[:ne] = col
+        rhs_t[ne] = n_gas_total
+
+        try:
+            X = np.linalg.solve(J, np.column_stack([rhs_p, rhs_t]))
+        except np.linalg.LinAlgError:
+            return None
+
+        # Extract sensitivities (last row = dn/dlnT and dn/dlnP)
+        dn_dlnT = float(X[ne, 0])
+        dn_dlnP = float(X[ne, 1])
+        dpi_dlnT = X[:ne, 0]                  # shape (ne,)
+
+        dlnV_dlnT = 1.0 + dn_dlnT
+        dlnV_dlnP = -1.0 + dn_dlnP
+
+        # ---- Equilibrium Cp/R (RP-1311 Eq. 2.59, pure-gas terms) ----
+        # Term 4 (frozen):  Σⱼ nⱼ·Cpⱼ/R
+        # Term 1:           Σᵢ (Σⱼ nⱼ·Aᵢⱼ·hⱼ) · (∂πᵢ/∂lnT)
+        # Term 3:           (Σⱼ nⱼ·hⱼ) · dn_dlnT
+        # Term 5:           Σⱼ nⱼ·hⱼ²
+        cp_fr_over_R = mix.total_gas_cp(T) / _R
+        nA_dot_h = A_gas.T @ (n_gas_arr * h_gas)   # (ne,): Σⱼ nⱼ·Aᵢⱼ·hⱼ per element
+        cp_eq_over_R = (
+            cp_fr_over_R
+            + float(nA_dot_h @ dpi_dlnT)
+            + float(n_gas_arr @ h_gas) * dn_dlnT
+            + float(n_gas_arr @ (h_gas * h_gas))
+        )
+
+        if cp_eq_over_R <= 0.0 or not math.isfinite(cp_eq_over_R):
+            return None
+
+        # ---- γₛ = −1 / (∂lnV/∂lnP + (∂lnV/∂lnT)² · n / Cp_eq) ----
+        denom = dlnV_dlnP + (dlnV_dlnT ** 2) * n_gas_total / cp_eq_over_R
+        if not math.isfinite(denom) or abs(denom) < 1e-12:
+            return None
+
+        gamma_s = -1.0 / denom
+        if not math.isfinite(gamma_s) or gamma_s <= 1.0:
+            return None
+
+        return gamma_s
 
     def _solve_frozen_at_p(
         self, chamber: EquilibriumSolution, p_target: float

@@ -91,6 +91,12 @@ class EquilibriumSolution:
     failure_reason: Optional[NonConvergenceReason] = None
     element_balance_error: Optional[float] = None
     last_step_norm: Optional[float] = None
+    gamma_s: Optional[float] = None
+    """Equilibrium isentropic exponent γₛ (RP-1311).  Set by
+    :class:`~prometheus_equilibrium.equilibrium.performance.PerformanceSolver`
+    after a converged SP solve.  ``None`` for frozen solutions or HP chamber
+    solves; :py:attr:`isentropic_gamma` falls back to the frozen γ when
+    this is ``None``."""
 
     # ------------------------------------------------------------------
     # Composition
@@ -159,11 +165,22 @@ class EquilibriumSolution:
     def cv(self) -> float:
         """Mixture Cv at equilibrium T [J/(mol·K)].
 
-        Ideal-gas approximation: Cv = Cp − R.  Only valid for the
-        gas-phase contribution; for mixtures with significant condensed
-        mass the correction is smaller.
+        For a two-phase (gas + condensed) mixture only the gas fraction
+        contributes PV work, so the correct relation is:
+
+        .. math::
+
+            C_{v,\\text{mix}} = C_{p,\\text{mix}} - f \\cdot R
+
+        where :math:`f = n_{\\text{gas}} / n_{\\text{total}}` is the gas
+        mole fraction.  For a pure gas (:math:`f = 1`) this reduces to the
+        ideal-gas relation :math:`C_v = C_p - R`.
         """
-        return self.cp - R
+        n_total = self.mixture.total_moles
+        if n_total <= 0.0:
+            return self.cp - R
+        f = self.mixture.total_gas_moles / n_total
+        return self.cp - f * R
 
     @property
     def gamma(self) -> float:
@@ -174,6 +191,19 @@ class EquilibriumSolution:
             for a diatomic gas γ ≈ 7/5.
         """
         return self.cp / self.cv
+
+    @property
+    def isentropic_gamma(self) -> float:
+        """Isentropic exponent for nozzle flow calculations.
+
+        Returns the equilibrium γₛ (NASA RP-1311) if it was computed and
+        stored by :class:`~prometheus_equilibrium.equilibrium.performance.PerformanceSolver`
+        after a shifting SP solve, otherwise returns the frozen γ = Cp/Cv.
+
+        Returns:
+            γₛ > 1 (equilibrium) or γ = Cp/Cv (frozen fallback).
+        """
+        return self.gamma_s if self.gamma_s is not None else self.gamma
 
     @property
     def enthalpy(self) -> float:
@@ -203,11 +233,20 @@ class EquilibriumSolution:
     def speed_of_sound(self) -> float:
         """Frozen speed of sound a [m/s] at the equilibrium state.
 
-        Uses the gas-phase mean molar mass (excludes condensed species):
+        For a two-phase (gas + condensed) mixture in homogeneous flow the
+        condensed particles travel with the gas and contribute inertia.  The
+        correct formula accounts for both the gas fraction *f* and the
+        **total** mixture mean molar mass :math:`\\bar{M}_{\\text{mix}}`:
 
         .. math::
 
-            a = \\sqrt{\\gamma \\cdot R \\cdot T \\,/\\, \\bar{M}_{\\text{gas}}}
+            a = \\sqrt{\\gamma \\cdot f \\cdot R \\cdot T \\,/\\, \\bar{M}_{\\text{mix}}}
+
+        where :math:`f = n_{\\text{gas}} / n_{\\text{total}}` and
+        :math:`\\gamma` is computed from the two-phase Cv (see :py:attr:`cv`).
+        For a pure gas (:math:`f = 1`,
+        :math:`\\bar{M}_{\\text{mix}} = \\bar{M}_{\\text{gas}}`) this reduces
+        to the standard ideal-gas formula.
 
         Returns:
             Speed of sound in m/s.
@@ -215,22 +254,34 @@ class EquilibriumSolution:
         Raises:
             ValueError: If there are no gas-phase species.
         """
-        M_gas = self.gas_mean_molar_mass
-        if M_gas <= 0.0:
+        if self.gas_mean_molar_mass <= 0.0:
             raise ValueError("No gas-phase species — cannot compute speed of sound.")
-        return math.sqrt(self.gamma * R * self.temperature / M_gas)
+        n_total = self.mixture.total_moles
+        f = self.mixture.total_gas_moles / n_total if n_total > 0.0 else 1.0
+        M_mix = self.mixture.mean_molar_mass
+        return math.sqrt(self.isentropic_gamma * f * R * self.temperature / M_mix)
 
     @property
     def density(self) -> float:
-        """Gas-phase mixture density ρ [kg/m³] at equilibrium T and P.
+        """Total mixture density ρ [kg/m³] at equilibrium T and P.
 
-        From the ideal-gas law:
+        Accounts for both gas and condensed phases (homogeneous two-phase
+        flow).  Only the gas fraction contributes to the pressure, so:
 
         .. math::
 
-            \\rho = \\frac{P \\cdot \\bar{M}_{\\text{gas}}}{R \\cdot T}
+            \\rho = \\frac{P \\cdot \\bar{M}_{\\text{mix}}}{f \\cdot R \\cdot T}
+
+        where :math:`f = n_{\\text{gas}} / n_{\\text{total}}` and
+        :math:`\\bar{M}_{\\text{mix}}` is the total (gas + condensed) mean
+        molar mass.  For a pure gas (:math:`f = 1`,
+        :math:`\\bar{M}_{\\text{mix}} = \\bar{M}_{\\text{gas}}`) this reduces
+        to the ideal-gas law :math:`\\rho = P \\bar{M} / (R T)`.
         """
-        return self.pressure * self.gas_mean_molar_mass / (R * self.temperature)
+        n_total = self.mixture.total_moles
+        f = self.mixture.total_gas_moles / n_total if n_total > 0.0 else 1.0
+        M_mix = self.mixture.mean_molar_mass
+        return self.pressure * M_mix / (f * R * self.temperature)
 
     def characteristic_velocity(self, throat: "EquilibriumSolution") -> float:
         """Characteristic velocity c* [m/s].
@@ -249,7 +300,7 @@ class EquilibriumSolution:
         Returns:
             Characteristic velocity c* in m/s.
         """
-        g = throat.gamma
+        g = throat.isentropic_gamma
         gamma_factor = math.sqrt(g) * (2 / (g + 1)) ** ((g + 1) / (2 * (g - 1)))
         return throat.speed_of_sound / gamma_factor
 

@@ -80,11 +80,14 @@ def run_performance(include_terra: bool):
             result = perf.solve(problem, pe_pa=101325.0, shifting=(mode == "shifting"))
             mbar = result.exit.gas_mean_molar_mass * 1000
             print(f"\n  {mode.upper()}:")
-            print(f"    Chamber T = {result.chamber.temperature:.2f} K")
-            print(f"    Exit T    = {result.exit.temperature:.2f} K")
-            print(f"    Exit Mbar    = {mbar:.3f} g/mol")
-            print(f"    Isp_vac   = {result.isp_vac:.2f} m/s")
-            print(f"    Converged = {result.exit.converged}")
+            print(f"    Chamber T   = {result.chamber.temperature:.2f} K")
+            print(f"    Exit T      = {result.exit.temperature:.2f} K")
+            print(f"    Exit Mbar   = {mbar:.3f} g/mol (gas)")
+            print(f"    Isp_actual  = {result.isp_actual:.2f} s  (at 1 atm)")
+            print(f"    Isp_vac     = {result.isp_vac:.2f} s")
+            print(f"    C*          = {result.cstar:.2f} m/s  ({result.cstar/0.3048:.1f} ft/s)")
+            print(f"    Ae/At       = {result.area_ratio:.3f}")
+            print(f"    Converged   = {result.exit.converged}")
 
             # Check for condensed species in exit
             n_cond = sum(

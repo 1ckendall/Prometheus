@@ -1,0 +1,106 @@
+=== Rocket Performance Report ===
+
+[Simulation Configuration]
+Unit System: SI
+Temperature Unit: K
+Pressure Unit: MPa
+Ambient pressure : 0.101325 MPa
+Expansion target : Pe target: 0.101325 MPa
+
+[Shared Chamber State]
+Mode        T(K)     P(MPa)    gamma   M(g/mol)
+-----------------------------------------------------------
+Chamber       3173.45    6.894757   1.2147      19.294
+
+[Exit State Comparison]
+Mode        T(K)     P(MPa)    gamma   M(g/mol)
+-----------------------------------------------------------
+Frozen        1507.94    0.101325   1.2521      19.294
+Shifting      1778.69    0.101325   1.2390      19.212
+
+[Performance Comparison]
+Mode       Isp(act)  Isp(vac)   Isp(SL)        C*    Ae/At    Pc/Pe    T* (K)    Te (K)
+-------------------------------------------------------------------------------------------------------
+Frozen        253.00    279.71    253.00    1857.3    8.369    68.05    2793.88    1507.94
+Shifting      259.59    290.42    259.59    1886.0    8.766    68.05    2866.35    1778.69
+
+[Chamber Species Moles]
+Species                      Moles
+----------------------------------------
+H2 (G) - Type: NASA-9         1.3188e+01
+CO (G) - Type: NASA-9         1.1149e+01
+HCl (G) - Type: NASA-9        5.4968e+00
+H2O (G) - Type: NASA-9        4.2729e+00
+N2 (G) - Type: NASA-9         2.9845e+00
+Al2O3 (S) - Type: NASA-9      2.4561e+00
+H (G) - Type: NASA-9          7.1362e-01
+CO2 (G) - Type: NASA-9        4.6677e-01
+Cl (G) - Type: NASA-9         1.9916e-01
+AlCl (G) - Type: NASA-9       1.0535e-01
+HO (G) - Type: NASA-9         9.3943e-02
+HAlO (G) - Type: NASA-9       7.2174e-02
+HAlCl2O (G) - Type: NASA-9    3.5729e-02
+HAlClO (G) - Type: NASA-9     1.4638e-02
+AlCl2 (G) - Type: NASA-9      1.2199e-02
+H2AlClO2 (G) - Type: NASA-9   9.8354e-03
+AlCl3 (G) - Type: NASA-9      8.4699e-03
+AlClO (G) - Type: NASA-9      6.0972e-03
+NO (G) - Type: NASA-9         4.6770e-03
+H2AlO2 (G) - Type: NASA-9     3.5212e-03
+O (G) - Type: NASA-9          2.8184e-03
+H3AlO3 (G) - Type: NASA-9     2.4730e-03
+HAlCl2 (G) - Type: NASA-9     1.7082e-03
+AlO (G) - Type: NASA-9        1.2127e-03
+Al (G) - Type: NASA-9         9.9497e-04
+H3N (G) - Type: NASA-9        9.0003e-04
+CHN (G) - Type: NASA-9        7.3553e-04
+HAlCl (G) - Type: NASA-9      4.6510e-04
+Cl2 (G) - Type: NASA-9        4.3964e-04
+Al2O (G) - Type: NASA-9       4.1580e-04
+HAl (G) - Type: NASA-9        4.0221e-04
+O2 (G) - Type: NASA-9         3.5734e-04
+H2N (G) - Type: NASA-9        2.1700e-04
+HAlO2 (G) - Type: NASA-9      1.3757e-04
+Al2O2 (G) - Type: NASA-9      1.0556e-04
+HClO (G) - Type: NASA-9       9.5378e-05
+HN (G) - Type: NASA-9         9.3228e-05
+CClO (G) - Type: NASA-9       5.3996e-05
+N (G) - Type: NASA-9          5.1959e-05
+ClO (G) - Type: NASA-9        4.2644e-05
+AlCl2O (G) - Type: NASA-9     3.9150e-05
+H2AlCl (G) - Type: NASA-9     3.4975e-05
+CHO2 (G) - Type: NASA-9       1.2285e-05
+HN2 (G) - Type: NASA-9        1.1370e-05
+HNO (G) - Type: NASA-9        1.0994e-05
+CH2O2 (G) - Type: NASA-9      9.0429e-06
+CH4 (G) - Type: NASA-9        8.7877e-06
+AlO2 (G) - Type: NASA-9       8.7417e-06
+CH3 (G) - Type: NASA-9        6.9138e-06
+CHClO (G) - Type: NASA-9      6.4649e-06
+CN (G) - Type: NASA-9         4.7286e-06
+HO2 (G) - Type: NASA-9        3.6962e-06
+CNO (G) - Type: NASA-9        3.5153e-06
+H2Al (G) - Type: NASA-9       3.2779e-06
+H2O2 (G) - Type: NASA-9       2.4065e-06
+CClN (G) - Type: NASA-9       1.9836e-06
+CHO (G) - Type: NASA-9        1.5783e-06
+
+[Machine Data | format=prometheus-report-v1]
+unit_system=SI
+temperature_unit=K
+pressure_unit=MPa
+ambient_pressure=0.101325
+chamber_temperature=3173.44785
+chamber_pressure=6.894757
+frozen_exit_temperature=1507.939364
+frozen_exit_pressure=0.101325
+shifting_exit_temperature=1778.693183
+shifting_exit_pressure=0.101325
+isp_actual_frozen=253.0038505
+isp_actual_shifting=259.5862923
+cstar_frozen=1857.31096
+cstar_shifting=1885.97348
+area_ratio_frozen=8.368907085
+area_ratio_shifting=8.766198033
+pressure_ratio_frozen=68.04596102
+pressure_ratio_shifting=68.04596102

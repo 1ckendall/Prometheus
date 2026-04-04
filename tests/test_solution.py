@@ -125,8 +125,9 @@ def test_cp_positive(solved_x_x2):
 
 
 def test_cv_less_than_cp(solved_x_x2):
-    """Cv = Cp − R < Cp for ideal gas."""
+    """For pure gas (f=1): Cv = Cp − R < Cp."""
     sol = solved_x_x2
+    # For a gas-only mixture f = n_gas/n_total = 1, so Cv = Cp - 1*R = Cp - R
     assert sol.cv == pytest.approx(sol.cp - R, rel=1e-10)
     assert sol.cv < sol.cp
 
@@ -161,17 +162,84 @@ def test_speed_of_sound_positive(solved_x_x2):
 
 
 def test_speed_of_sound_formula(solved_x_x2):
-    """a = sqrt(γ·R·T / M̄_gas)."""
+    """For pure gas (f=1): a = sqrt(γ·R·T / M̄_mix) = sqrt(γ·R·T / M̄_gas)."""
     sol = solved_x_x2
-    expected = math.sqrt(sol.gamma * R * sol.temperature / sol.gas_mean_molar_mass)
+    # For gas-only mixture: f=1, M_mix = M_gas
+    expected = math.sqrt(sol.gamma * R * sol.temperature / sol.mixture.mean_molar_mass)
     assert sol.speed_of_sound == pytest.approx(expected, rel=1e-8)
 
 
 def test_density_ideal_gas(solved_x_x2):
-    """ρ = P·M̄_gas / (R·T) for ideal gas."""
+    """For pure gas (f=1): ρ = P·M̄_mix / (R·T) = P·M̄_gas / (R·T)."""
     sol = solved_x_x2
-    expected = sol.pressure * sol.gas_mean_molar_mass / (R * sol.temperature)
+    expected = sol.pressure * sol.mixture.mean_molar_mass / (R * sol.temperature)
     assert sol.density == pytest.approx(expected, rel=1e-8)
+
+
+def test_two_phase_cv_gamma_density_speed_of_sound():
+    """Two-phase Cv, γ, density, and speed of sound use mixture mean molar mass and gas fraction.
+
+    For a mixture with 2 mol gas (M=0.002 kg/mol) and 1 mol condensed (M=0.100 kg/mol):
+      n_gas=2, n_total=3, f=2/3, M_mix=(2*0.002+1*0.100)/3 = 0.038 kg/mol
+      Cp_mix = x_gas*Cp_gas + x_cond*Cp_cond = (2/3)*Cp_g + (1/3)*Cp_c
+      Cv_mix = Cp_mix - f*R  (only gas contributes PV work)
+      a = sqrt(γ * f * R * T / M_mix)
+      ρ = P * M_mix / (f * R * T)
+    """
+    from prometheus_equilibrium.equilibrium.mixture import Mixture
+
+    class _Cond(Species):
+        def __init__(self, elements, cp_r, molar_mass_kg):
+            super().__init__(elements=elements, state="S")
+            self._cp_r = cp_r
+            self._M = molar_mass_kg
+
+        def molar_mass(self):
+            return self._M
+
+        def specific_heat_capacity(self, T):
+            return self._cp_r * R
+
+        def enthalpy(self, T):
+            return self._cp_r * R * float(T)
+
+        def entropy(self, T):
+            return self._cp_r * R
+
+    sp_gas = _Gas({"X": 1}, g0=1.0, h0=3.0, molar_mass_kg=0.002)  # Cp = 3R
+    sp_cond = _Cond({"Y": 1}, cp_r=4.0, molar_mass_kg=0.100)       # Cp = 4R
+
+    # 2 mol gas + 1 mol condensed
+    mix = Mixture([sp_gas, sp_cond], np.array([2.0, 1.0]))
+    T, P = 1000.0, P_REF
+
+    sol = EquilibriumSolution(
+        mixture=mix,
+        temperature=T,
+        pressure=P,
+        converged=True,
+        iterations=1,
+        residuals=np.zeros(0),
+        lagrange_multipliers=np.zeros(0),
+    )
+
+    f = 2.0 / 3.0
+    M_mix = (2 * 0.002 + 1 * 0.100) / 3.0  # = 0.104/3 ≈ 0.03467 kg/mol
+
+    # Cp_mix per mole of mixture
+    cp_mix = (2.0 / 3.0) * 3.0 * R + (1.0 / 3.0) * 4.0 * R  # = (6+4)/3 * R
+    cv_mix = cp_mix - f * R
+    gamma_expected = cp_mix / cv_mix
+
+    assert sol.cp == pytest.approx(cp_mix, rel=1e-8)
+    assert sol.cv == pytest.approx(cv_mix, rel=1e-8)
+    assert sol.gamma == pytest.approx(gamma_expected, rel=1e-8)
+
+    a_expected = math.sqrt(gamma_expected * f * R * T / M_mix)
+    assert sol.speed_of_sound == pytest.approx(a_expected, rel=1e-8)
+
+    rho_expected = P * M_mix / (f * R * T)
+    assert sol.density == pytest.approx(rho_expected, rel=1e-8)
 
 
 def test_speed_of_sound_raises_no_gas():
