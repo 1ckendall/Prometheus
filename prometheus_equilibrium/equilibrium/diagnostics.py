@@ -34,7 +34,7 @@ class NonConvergenceReason(IntEnum):
 
     Attributes:
         MAX_ITERATIONS_REACHED: The iteration counter hit ``max_iterations``
-            (or the outer temperature-search limit of 50) without the step-size
+            (or the outer temperature-search limit) without the step-size
             criterion dropping below ``tolerance``.
         SINGULAR_JACOBIAN: ``numpy.linalg.LinAlgError`` was raised inside the
             Newton solve, indicating a singular or near-singular Jacobian.

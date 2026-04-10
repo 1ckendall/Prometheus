@@ -104,7 +104,7 @@ class ElementMatrix:
         for sp in mixture.species:
             all_elements.update(sp.elements.keys())
 
-        regular = sorted(e for e in all_elements if e != "e-")
+        regular = sorted(el for el in all_elements if el != "e-")
         has_electron = "e-" in all_elements
         elements = regular + (["e-"] if has_electron else [])
 

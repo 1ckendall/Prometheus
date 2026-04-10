@@ -297,7 +297,7 @@ def test_shifting_nozzle_isp_vac_positive(log_entropy_hp_problem):
 
 
 def test_shifting_sp_problem_default_uses_total_entropy_constraint(monkeypatch):
-    """Default shifting SP setup should use normalized whole-flow entropy."""
+    """Default shifting SP setup should use raw whole-flow entropy."""
     gas = _LogEntropyGas({"X": 1}, cp_over_r=4.0, s_ref_over_r=2.0, molar_mass_kg=0.02)
     condensed = _ConstantCondensedSpecies(
         {"X": 1}, cp_over_r=2.0, s_ref_over_r=15.0, molar_mass_kg=0.05
@@ -332,13 +332,8 @@ def test_shifting_sp_problem_default_uses_total_entropy_constraint(monkeypatch):
     _ = perf._solve_at_p(chamber, 101325.0, shifting=True)
 
     sp_problem = captured["problem"]
-    species_map = perf._build_condensed_entropy_normalization_map(
-        chamber_mix.species, reference_temperature=298.15
-    )
-    normalized_mix = perf._remap_mixture_species(chamber_mix, species_map)
-    expected_target = normalized_mix.total_entropy(chamber.temperature, chamber.pressure)
     assert sp_problem.problem_type == ProblemType.SP
-    assert sp_problem.constraint1 == pytest.approx(expected_target)
+    assert sp_problem.constraint1 == pytest.approx(chamber.total_entropy)
     assert sp_problem.sp_entropy_mode == "total"
     assert chamber.total_entropy != pytest.approx(chamber.total_gas_entropy)
 

@@ -19,6 +19,9 @@ from scipy.constants import R
 REFERENCE_TEMPERATURE = 298.15  # Kelvin
 REFERENCE_PRESSURE = 1e5  # Standard reference pressure [Pa] (1 bar, IUPAC convention)
 UNIVERSAL_GAS_CONSTANT = R
+
+# We pretend that e- is an element as this is the easiest way to keep track of charge in equilibrium
+# calculations.
 ELEMENTS_MOLAR_MASSES = {
     "e-": 5.486e-4,  # Electron
     "H": 1.008,  # Hydrogen

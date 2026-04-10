@@ -1461,8 +1461,6 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
     * **Analytical minor-species update** from the converged element
       potentials — exact at any mole-fraction scale, no log-space artefacts.
     * **PEP outer temperature search** with interval-halving fallback.
-
-    This is the *recommended* default solver.
     """
 
     def solve(
@@ -2053,8 +2051,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
     """Gibbs free energy minimisation via modified Lagrange multipliers.
 
     Implements the full algorithm from NASA RP-1311 (Gordon & McBride, 1994),
-    using `cpropep` as a line-by-line reference.  This is also the algorithm
-    inside RocketCEA, enabling direct numerical validation.
+    using `cpropep` and `CEA` as references.
 
     Algorithm overview
     ------------------

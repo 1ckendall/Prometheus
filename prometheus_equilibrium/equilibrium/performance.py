@@ -126,7 +126,7 @@ class PerformanceSolver:
         self,
         solver: Optional[EquilibriumSolver] = None,
         db=None,
-        sp_entropy_mode: str = "total_normalized",
+        sp_entropy_mode: str = "total",
     ):
         self.solver = solver or GordonMcBrideSolver()
         self.db = db  # Optional SpeciesDatabase for condensed phase transitions
