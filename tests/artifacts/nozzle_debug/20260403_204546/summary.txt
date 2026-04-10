@@ -1,8 +1,0 @@
-Output directory: tests\artifacts\nozzle_debug\20260403_204546
-
-case                          Isp(actual)  Isp(vac)   Exit T [K]  Exit Mgas [g/mol]
--------------------------------------------------------------------------------
-terra_on_shifting                259.197    296.229     2073.07            18.672
-terra_on_frozen                  255.821    287.773     1800.70            19.046
-terra_off_shifting               211.005    234.439     1695.20            29.640
-terra_off_frozen                 252.234    281.997     1653.84            19.046

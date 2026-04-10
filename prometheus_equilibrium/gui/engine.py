@@ -650,7 +650,7 @@ class EngineDock(QDockWidget):
                     combo = container.findChild(QComboBox) if container else None
                     w_inp = sim_page.fuel_table.cellWidget(r, 1)
 
-                    name = combo.currentText() if combo else ""
+                    name = (combo.currentData() or combo.currentText()) if combo else ""
                     w = float(w_inp.text()) if w_inp and w_inp.text() else 0.0
                     if w > 0 and name:
                         fuel_components[name] = fuel_components.get(name, 0.0) + w
@@ -661,7 +661,7 @@ class EngineDock(QDockWidget):
                     combo = container.findChild(QComboBox) if container else None
                     w_inp = sim_page.ox_table.cellWidget(r, 1)
 
-                    name = combo.currentText() if combo else ""
+                    name = (combo.currentData() or combo.currentText()) if combo else ""
                     w = float(w_inp.text()) if w_inp and w_inp.text() else 0.0
                     if w > 0 and name:
                         ox_components[name] = ox_components.get(name, 0.0) + w
@@ -721,7 +721,7 @@ class EngineDock(QDockWidget):
                     combo = container.findChild(QComboBox) if container else None
                     w_inp = sim_page.solid_table.cellWidget(row, 1)
 
-                    name = combo.currentText() if combo else ""
+                    name = (combo.currentData() or combo.currentText()) if combo else ""
                     w = float(w_inp.text()) if w_inp and w_inp.text() else 0.0
                     if w > 0 and name:
                         mix_dict[name] = mix_dict.get(name, 0.0) + w

@@ -98,7 +98,7 @@ RANKINE_TO_K = 1.0 / 1.8
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_THERMO_DIR = _REPO_ROOT / "prometheus" / "thermo_data"
+_THERMO_DIR = _REPO_ROOT / "prometheus_equilibrium" / "thermo_data"
 
 _DB = SpeciesDatabase(
     nasa7_path=str(_THERMO_DIR / "nasa7.json"),

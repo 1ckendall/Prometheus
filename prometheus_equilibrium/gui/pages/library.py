@@ -54,9 +54,9 @@ class LibraryPage(QWidget):
         filter_lay.addWidget(self.db_filter)
         layout.addLayout(filter_lay)
 
-        self.db_table = QTableWidget(0, 6)
+        self.db_table = QTableWidget(0, 7)
         self.db_table.setHorizontalHeaderLabels(
-            ["ID", "Name", "Phase", "Roles", "Density", "dHf298 (J/mol)"]
+            ["Name", "ID", "CAS", "Aliases", "Roles", "Density (g/cc)", "dHf298 (J/mol)"]
         )
         self.db_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.db_table.horizontalHeader().setStretchLastSection(True)
@@ -72,16 +72,22 @@ class LibraryPage(QWidget):
             row_idx = self.db_table.rowCount()
             self.db_table.insertRow(row_idx)
 
-            phase = (
-                "L"
-                if "density_liq" in p_data
-                else ("S" if "density_sol" in p_data else "G")
+            density_kgm3 = p_data.get("density", 0.0)
+            density_str = (
+                f"{float(density_kgm3) / 1000:.3f}"
+                if density_kgm3 and float(density_kgm3) > 0
+                else "—"
             )
-            density = str(p_data.get("density_liq", p_data.get("density_sol", "N/A")))
-            dhf298 = str(p_data.get("dhf298", "N/A"))
-            roles = ", ".join(p_data.get("roles", [])) if "roles" in p_data else "N/A"
+            dhf298 = p_data.get("dHf298", "")
+            dhf298_str = f"{float(dhf298):.1f}" if dhf298 != "" else "—"
+            roles = ", ".join(p_data.get("roles", []))
+            cas = p_data.get("cas", "")
+            aliases = ", ".join(p_data.get("aliases", []))
+            name = p_data.get("name", prop_id)
 
-            cols = [prop_id, p_data.get("name", prop_id), phase, roles, density, dhf298]
+            # Store all searchable text in column 0 tooltip so filter_db_table
+            # can search hidden metadata without extra hidden columns.
+            cols = [name, prop_id, cas, aliases, roles, density_str, dhf298_str]
             for col_idx, text in enumerate(cols):
                 item = QTableWidgetItem(str(text))
                 item.setFlags(item.flags() ^ Qt.ItemIsEditable)

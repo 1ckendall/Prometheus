@@ -27,24 +27,35 @@ class SimulatorPage(QWidget):
         self.prop_db = prop_db
         self.database_items = self.prop_db.ingredient_ids
 
-        # Categorize ingredients by role for filtering
-        self.oxidizer_items = []
-        self.fuel_items = []
-        self.all_items = [""] + self.database_items
-
+        # Build {id -> display_name} map for combo population.
+        # Display name is the human-readable "name" field; falls back to id.
+        self._id_to_display: dict[str, str] = {}
         for ing_id in self.database_items:
             try:
-                ing = self.prop_db.find_ingredient(ing_id)
-                roles = ing.get("roles", [])
-                if "oxidizer" in roles:
-                    self.oxidizer_items.append(ing_id)
-                else:
-                    self.fuel_items.append(ing_id)
-            except:
-                self.fuel_items.append(ing_id)
+                rec = self.prop_db.find_ingredient(ing_id)
+                self._id_to_display[ing_id] = rec.get("name", ing_id)
+            except Exception:
+                self._id_to_display[ing_id] = ing_id
 
-        self.oxidizer_items = [""] + sorted(self.oxidizer_items)
-        self.fuel_items = [""] + sorted(self.fuel_items)
+        # Categorize ingredients by role for filtering.
+        # Each list contains (display_name, ingredient_id) pairs so combos can
+        # call addItem(display, userData=id).
+        self.oxidizer_items: list[tuple[str, str]] = [("", "")]
+        self.fuel_items: list[tuple[str, str]] = [("", "")]
+        self.all_items: list[tuple[str, str]] = [("", "")]
+
+        for ing_id in self.database_items:
+            display = self._id_to_display[ing_id]
+            pair = (display, ing_id)
+            self.all_items.append(pair)
+            try:
+                roles = self.prop_db.find_ingredient(ing_id).get("roles", [])
+                if "oxidizer" in roles:
+                    self.oxidizer_items.append(pair)
+                else:
+                    self.fuel_items.append(pair)
+            except Exception:
+                self.fuel_items.append(pair)
 
         self.double_validator = QDoubleValidator()
         self.double_validator.setNotation(QDoubleValidator.StandardNotation)
@@ -182,7 +193,19 @@ class SimulatorPage(QWidget):
         parent_layout.addWidget(group)
         return table, tot_disp, density_lbl
 
-    def _add_biprop_row(self, table, name, wt, update_func, items=None):
+    def _select_combo_ingredient(self, combo: QComboBox, ingredient_id: str) -> None:
+        """Set *combo* to the entry whose userData matches *ingredient_id*.
+
+        Falls back to ``setCurrentText`` if no userData match is found (e.g.
+        user-typed text or an ID from an older saved composition file).
+        """
+        idx = combo.findData(ingredient_id)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        else:
+            combo.setCurrentText(ingredient_id)
+
+    def _add_biprop_row(self, table, ingredient_id, wt, update_func, items=None):
         row = table.rowCount()
         table.insertRow(row)
 
@@ -197,8 +220,9 @@ class SimulatorPage(QWidget):
 
         combo = QComboBox()
         combo.setEditable(True)
-        combo.addItems(items)
-        combo.setCurrentText(name)
+        for display, ing_id in items:
+            combo.addItem(display, ing_id)
+        self._select_combo_ingredient(combo, ingredient_id)
         combo.currentTextChanged.connect(update_func)
 
         search_btn = QPushButton("🔍")
@@ -229,13 +253,18 @@ class SimulatorPage(QWidget):
     def open_database_search(self, target_combo, items=None):
         if items is None:
             items = self.all_items
-        # Remove empty string for search dialog if present
-        search_items = [i for i in items if i]
+        # Convert (display, id) pairs to the dict form DatabaseSearchDialog expects.
+        # Skip the blank placeholder entry.
+        search_items = self.prop_db.search_items()
+        # Filter to the subset relevant to this combo (fuel/ox/all).
+        if items is not self.all_items:
+            allowed_ids = {ing_id for _, ing_id in items if ing_id}
+            search_items = [s for s in search_items if s["id"] in allowed_ids]
         dialog = DatabaseSearchDialog(search_items, self)
         if dialog.exec():
-            selected = dialog.get_selected_item()
+            selected = dialog.get_selected_item()  # returns the ingredient ID
             if selected:
-                target_combo.setCurrentText(selected)
+                self._select_combo_ingredient(target_combo, selected)
 
     def _del_biprop_row(self, table, btn, update_func):
         for r in range(table.rowCount()):
@@ -269,15 +298,15 @@ class SimulatorPage(QWidget):
             w_widget = table.cellWidget(r, 1)
             if not combo or not w_widget:
                 continue
-            name = combo.currentText().strip()
+            ing_id = (combo.currentData() or combo.currentText()).strip()
             try:
                 wt = float(w_widget.text())
             except ValueError:
                 continue
-            if not name or wt <= 0:
+            if not ing_id or wt <= 0:
                 continue
             try:
-                ing = self.prop_db.find_ingredient(name)
+                ing = self.prop_db.find_ingredient(ing_id)
                 rho = float(ing.get("density", 0))
             except KeyError:
                 return None
@@ -394,7 +423,7 @@ class SimulatorPage(QWidget):
         # Start empty
         self.add_solid_row("", "0.0")
 
-    def add_solid_row(self, name="", wt="0.00"):
+    def add_solid_row(self, ingredient_id="", wt="0.00"):
         row = self.solid_table.rowCount()
         self.solid_table.insertRow(row)
 
@@ -405,8 +434,9 @@ class SimulatorPage(QWidget):
 
         combo = QComboBox()
         combo.setEditable(True)
-        combo.addItems(self.all_items)
-        combo.setCurrentText(name)
+        for display, ing_id in self.all_items:
+            combo.addItem(display, ing_id)
+        self._select_combo_ingredient(combo, ingredient_id)
         combo.currentTextChanged.connect(self.update_solid_totals)
 
         search_btn = QPushButton("🔍")
@@ -478,15 +508,15 @@ class SimulatorPage(QWidget):
             container = table.cellWidget(r, 0)
             combo = container.findChild(QComboBox) if container else None
             w_widget = table.cellWidget(r, 1)
-            name = combo.currentText().strip() if combo else ""
+            ing_id = (combo.currentData() or combo.currentText()).strip() if combo else ""
             weight_text = w_widget.text().strip() if w_widget else "0"
             try:
                 weight = float(weight_text)
             except ValueError:
                 continue
-            if not name or weight <= 0.0:
+            if not ing_id or weight <= 0.0:
                 continue
-            rows.append({"name": name, "mass_fraction": weight})
+            rows.append({"name": ing_id, "mass_fraction": weight})
         return rows
 
     def _load_rows(self, table, add_row_fn, rows):

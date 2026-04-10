@@ -49,6 +49,29 @@ _SCALAR_TYPES = (int, float, np.floating, np.integer)
 _T_REF = 298.15  # K — standard reference temperature
 
 
+def _elements_to_hill(elements: dict) -> str:
+    """Return the Hill-canonical formula string for an element-count dict.
+
+    Hill order: C first, H second, then remaining elements alphabetically.
+    Count of 1 is omitted (e.g. ``O`` not ``O1``).
+
+    Args:
+        elements: Mapping of element symbol → atom count (may be float).
+
+    Returns:
+        Hill-canonical formula string, e.g. ``"Al2O3"``.
+    """
+    counts = {sym: int(round(n)) for sym, n in elements.items() if n > 0}
+    order: list[str] = []
+    for sym in ("C", "H"):
+        if sym in counts:
+            order.append(sym)
+    for sym in sorted(counts):
+        if sym not in ("C", "H"):
+            order.append(sym)
+    return "".join(sym if counts[sym] == 1 else f"{sym}{counts[sym]}" for sym in order)
+
+
 # ---------------------------------------------------------------------------
 # SyntheticSpecies
 # ---------------------------------------------------------------------------
@@ -85,24 +108,13 @@ class SyntheticSpecies(Species):
         state: str,
         dHf298: float,
         cp: float,
-        molar_mass_g_mol: float,
         phase: Optional[str] = None,
         alias: Optional[str] = None,
     ) -> None:
         super().__init__(elements, state, phase)
         self.dHf298 = float(dHf298)
         self.cp = float(cp)
-        self._molar_mass_kg = float(molar_mass_g_mol) / 1000.0
         self.alias = alias
-
-    def molar_mass(self) -> float:
-        """Return the stored explicit molar mass [kg/mol].
-
-        Overrides the parent computation from the elements dict: for synthetic
-        species the effective formula may not perfectly reconstruct the bulk
-        molecular weight, so the value supplied in the TOML takes precedence.
-        """
-        return self._molar_mass_kg
 
     def specific_heat_capacity(
         self, T: Union[float, np.ndarray]
@@ -280,7 +292,7 @@ class PropellantDatabase:
     @staticmethod
     def _make_synthetic(rec: dict) -> SyntheticSpecies:
         """Create a constant-Cp SyntheticSpecies from an inline-composition record."""
-        required = {"elements", "molar_mass", "dHf298"}
+        required = {"elements", "dHf298"}
         missing = required - rec.keys()
         if missing:
             raise ValueError(
@@ -294,7 +306,6 @@ class PropellantDatabase:
             state=state,
             dHf298=float(rec["dHf298"]),
             cp=float(rec.get("cp", 0.0)),
-            molar_mass_g_mol=float(rec["molar_mass"]),
             phase=rec.get("phase"),
             alias=rec.get("name") or rec.get("alias"),
         )
@@ -414,6 +425,35 @@ class PropellantDatabase:
                 f"Available: {self.formulation_ids}"
             )
         return self._formulations[formulation_id]
+
+    def search_items(self) -> List[dict]:
+        """Return a list of search records for use with the GUI search dialog.
+
+        Each record has the keys ``id``, ``display``, and ``search_text``.
+        ``display`` is the human-readable name shown in the UI.
+        ``search_text`` is a pre-lowercased concatenation of all searchable
+        fields (ID, name, CAS number, aliases) so the dialog only needs a
+        single ``in`` check per keystroke.
+
+        Returns:
+            List of ``{id, display, search_text}`` dicts, one per ingredient,
+            in sorted ID order.
+        """
+        items = []
+        for ing_id in sorted(self._ingredients):
+            rec = self._ingredients[ing_id]
+            name = rec.get("name", ing_id)
+            cas = rec.get("cas", "")
+            aliases = rec.get("aliases", [])
+            # Prefer inline elements dict; fall back to the resolved species object
+            # (always present after load()) so thermo_id-based entries also get a formula.
+            elements = rec.get("elements") or getattr(rec.get("_species"), "elements", {})
+            formula = _elements_to_hill(elements) if elements else ""
+            display = name
+            parts = [ing_id, name, cas, formula] + list(aliases)
+            search_text = " ".join(p for p in parts if p).lower()
+            items.append({"id": ing_id, "display": display, "search_text": search_text})
+        return items
 
     @property
     def ingredient_ids(self) -> List[str]:
