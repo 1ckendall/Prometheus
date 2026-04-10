@@ -26,6 +26,16 @@ uv run isort prometheus_equilibrium/ tests/                               # Sort
 
 `tests/benchmark.py` is the primary regression benchmark. It tests H2/O2, CH4/O2, N2H4/N2O4, and NH3/O2 across 11 O/F ratios and 5 pressures (170 cases) against RocketCEA and reports temperature error, mean molar mass, γ, Cp, and speed of sound.
 
+`tests/test_regression_integration.py` is the pytest-based integration suite (requires `rocketcea`). It tests H2/O2, CH4/O2, and APCP frozen+shifting performance against RocketCEA ground truth. Run with:
+
+```bash
+uv run pytest tests/test_regression_integration.py -v           # integration suite only
+uv run pytest -m "not integration" -q                           # skip integration tests (fast)
+uv run pytest -m integration -q                                  # integration tests only
+```
+
+RocketCEA species registration in tests: custom species are registered at 298.15 K using `add_new_fuel`/`add_new_oxidizer` with enthalpy from `sp.enthalpy(298.15)`. Do **not** use built-in `LOX`/`LH2` — they use cryogenic reference temperatures incompatible with Prometheus's 298.15 K baseline. The `cstar` metric is excluded from CEA comparisons due to a systematic ~3% reference-pressure offset; `Tc` and `Isp` agree to <0.05%.
+
 ## Implementation Status
 
 Current state:
@@ -48,7 +58,7 @@ prometheus_equilibrium/
     problem.py               — EquilibriumProblem, ProblemType enum
     solution.py              — EquilibriumSolution dataclass + derived properties
     solver.py                — EquilibriumSolver ABC, _ReactionAdjustmentBase, all three solver classes
-    performance.py           — PerformanceSolver (frozen + shifting nozzle expansion)
+    performance.py           — PerformanceSolver (frozen + shifting nozzle expansion); see §PerformanceSolver below
   gui/                       — PySide6 desktop interface
   propellants/
     loader.py                — PropellantDatabase, SyntheticSpecies, TOML-based propellant definitions
@@ -63,8 +73,9 @@ prometheus_equilibrium/
       _common.py             — shared parsing utilities
   tools/build_db.py          — parse raw .thr/.jnf files → nasa7.json, nasa9.json, janaf.csv
   tools/build_legacy_thermo.py — parse TERRA/AFCESIC binaries + calibrate AFCESIC references
-tests/                       — pytest unit tests (mock species, no external DB dependency)
-tests/benchmark.py           — integration benchmark vs. RocketCEA
+tests/                       — pytest unit tests (most use mock species, no external DB dependency)
+tests/benchmark.py           — integration benchmark vs. RocketCEA (170 cases, standalone script)
+tests/test_regression_integration.py — pytest integration suite: H2/O2, CH4/O2, APCP vs. RocketCEA (@pytest.mark.integration)
 ```
 
 ### Species and database
@@ -115,13 +126,32 @@ EquilibriumSolver (ABC)
 **`MajorSpeciesSolver`** (96.5% convergence, 0.013% mean T error vs RocketCEA):
 - Inner loop (`_tp_equilibrium`): compressed Newton on major gas species only — matrix is always S×S regardless of species count. Minor species set analytically from element potentials π after each Newton step.
 - Outer loop (`_temperature_search`): Newton + interval-halving to satisfy energy constraint (HP/SP).
-- `_tp_equilibrium` returns a 4-tuple `(mixture, pi, n_iters, converged_bool)`; `_temperature_search` returns a 5-tuple `(mixture, T, pi, n_outer, converged_bool)`. `solve()` uses the returned `converged` flag directly — it does NOT recheck element residuals, as the "final exact update" in `_temperature_search` temporarily disturbs element balance.
+- `_tp_equilibrium` returns a 4-tuple `(mixture, pi, n_iters, converged_bool)`; `_temperature_search` returns a 5-tuple `(mixture, T, pi, n_outer, converged_bool)`. `solve()` uses the returned `converged` flag directly.
+- After each `_tp_equilibrium` call, a "final exact update" applies `nⱼ = n·exp(Aⱼ·π − g°/RT − ln P/P°)` to all gas species (needed for outer-loop bootstrap when the inner loop starts from a flat initial guess), followed by a Newton element-balance correction loop (`A_gas^T diag(n_gas) A_gas · δπ = b₀ − Aᵀ·n`) that restores conservation to machine precision.
 
 **`GordonMcBrideSolver`** (72.9% convergence, 0.82% mean T error — reference/validation):
 - Single Newton loop solving π, Δnc, Δln(n), Δln(T) simultaneously. Matrix size (S+nc+1)² for TP or (S+nc+2)² for HP/SP.
 - Stability fix: tracks `n_var` as the *previous iteration's* `n_gas_total`. This gives `G[idx_n, idx_n] = n_gas_total_current − n_gas_total_prev ≠ 0`, preventing runaway `delta_ln_n` on lean mixtures. `n_var` is stored before `_apply_update`, so the next iteration sees the change. `mu_gas` always uses the actual current `n_gas_total`, not `n_var`.
 
 **Shared** (`_ReactionAdjustmentBase`): `_temperature_search`, `_split_major_minor`, `_manage_condensed_phases`, `_initialise` (validates, filters ionic species, removes products not coverable from reactant elements).
+
+`_temperature_search` outer loop uses `|dlnT| < 1e-4` as convergence criterion (20× looser than the inner 5e-6). After the outer loop converges, a single Newton T correction `ΔT = −f/Cp` (where `f = ΣnⱼHⱼ(T) − H₀`) is applied directly without re-solving composition, guarded by `|ΔT| < 1.0 K`. This removes residual HP/SP energy error that would otherwise amplify ~180× through isentropic nozzle expansion.
+
+### PerformanceSolver
+
+`PerformanceSolver(solver, spec_db)` wraps any `EquilibriumSolver` to compute nozzle performance.
+
+```python
+perf = PerformanceSolver(solver, spec_db)
+result = perf.solve(problem, area_ratio=40.0, shifting=True)
+# result.isp_shifting, result.isp_frozen, result.chamber, result.throat, result.exit
+```
+
+Key internals:
+- `_find_throat_frozen(chamber)` — bisects on Mach=1 in pressure space (frozen composition, reliable)
+- `_find_throat(chamber, shifting)` — frozen result is used directly for `shifting=False`. For `shifting=True`, uses **bisection** (not Newton) on `Mach(P) − 1 = 0` because MajorSpeciesSolver's `Mach(P)` has ~1e-3 noise from inner-loop tolerance, making numerical `dMach/dP` unreliable. The bisection bracket is `[0.1·Pc, P_frozen_throat]`.
+- `_solve_at_p(chamber, p, shifting, guess)` — equilibrium solve at fixed pressure, using prior solution as warm start
+- Exit condition is matched by area ratio: `_find_exit(throat, area_ratio, shifting)`
 
 ### Key design constants
 

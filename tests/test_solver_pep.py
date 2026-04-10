@@ -130,17 +130,24 @@ def test_tp_converges(x_x2_problem):
 
 
 def test_history_default_full_capture_pep_major_species(x_x2_problem):
-    """PEP and major-species solver should capture history by default."""
-    sol_pep = PEPSolver(max_iterations=200).solve(x_x2_problem)
-    sol_hyb = MajorSpeciesSolver(max_iterations=120).solve(x_x2_problem)
+    """PEP and major-species solver should capture history when explicitly enabled."""
+    sol_pep = PEPSolver(max_iterations=200, capture_history=True).solve(x_x2_problem)
+    sol_hyb = MajorSpeciesSolver(max_iterations=120, capture_history=True).solve(x_x2_problem)
     assert sol_pep.converged
     assert sol_hyb.converged
     assert sol_pep.history is not None and len(sol_pep.history) > 0
     assert sol_hyb.history is not None and len(sol_hyb.history) > 0
 
 
+def test_history_off_by_default_pep_major_species(x_x2_problem):
+    """History capture should be off by default for performance."""
+    sol_hyb = MajorSpeciesSolver(max_iterations=120).solve(x_x2_problem)
+    assert sol_hyb.converged
+    assert sol_hyb.history is None
+
+
 def test_history_can_be_disabled_pep_major_species(x_x2_problem):
-    """PEP and major-species solver should support disabling history capture."""
+    """PEP and major-species solver should support disabling history capture explicitly."""
     sol_pep = PEPSolver(max_iterations=200, capture_history=False).solve(x_x2_problem)
     sol_hyb = MajorSpeciesSolver(max_iterations=120, capture_history=False).solve(
         x_x2_problem

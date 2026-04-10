@@ -77,6 +77,7 @@ class Mixture:
         ordered = gas + cnd
         self._species: List[Species] = [sp for sp, _ in ordered]
         self._moles: np.ndarray = np.array([n for _, n in ordered], dtype=float)
+        self._n_gas: int = len(gas)
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -125,7 +126,7 @@ class Mixture:
     @property
     def n_gas(self) -> int:
         """Number of gas-phase species."""
-        return sum(1 for sp in self._species if sp.condensed == 0)
+        return self._n_gas
 
     @property
     def n_condensed(self) -> int:
@@ -239,10 +240,15 @@ class Mixture:
 
         For condensed species Cp is included directly (no pressure-mixing term).
         """
-        if self.total_moles == 0.0:
+        n_total = self.total_moles
+        if n_total == 0.0:
             return 0.0
-        cps = np.array([sp.specific_heat_capacity(T) for sp in self._species])
-        return float(np.sum(self.mole_fractions * cps))
+        cp_total = 0.0
+        for sp, n_i in zip(self._species, self._moles):
+            if n_i <= 0.0:
+                continue
+            cp_total += n_i * sp.specific_heat_capacity(T)
+        return float(cp_total / n_total)
 
     def enthalpy(self, T: float) -> float:
         """Mixture molar enthalpy [J/mol].
@@ -255,10 +261,15 @@ class Mixture:
         sensible), not the sensible-only H−H(298.15) stored in JANAF data.
         See :py:attr:`Prometheus.chemical.JANAF` for the current limitation.
         """
-        if self.total_moles == 0.0:
+        n_total = self.total_moles
+        if n_total == 0.0:
             return 0.0
-        hs = np.array([sp.enthalpy(T) for sp in self._species])
-        return float(np.sum(self.mole_fractions * hs))
+        h_total = 0.0
+        for sp, n_i in zip(self._species, self._moles):
+            if n_i <= 0.0:
+                continue
+            h_total += n_i * sp.enthalpy(T)
+        return float(h_total / n_total)
 
     def entropy(self, T: float, P: float = P_REF) -> float:
         """Mixture molar entropy [J/(mol·K)] at temperature T and pressure P.
@@ -332,9 +343,18 @@ class Mixture:
     # ------------------------------------------------------------------
 
     def total_enthalpy(self, T: float) -> float:
-        """Total mixture enthalpy H_total = Σⱼ nⱼ·Hⱼ°(T) [J]."""
-        hs = np.array([sp.enthalpy(T) for sp in self._species])
-        return float(np.sum(self._moles * hs))
+        """Total mixture enthalpy H_total = Σⱼ nⱼ·Hⱼ°(T) [J].
+
+        Only species with positive mole amounts contribute, so zero-mole
+        species whose thermo polynomials have no coverage at T (returning
+        NaN) do not poison the sum via 0 × NaN = NaN.
+        """
+        h_total = 0.0
+        for sp, n_i in zip(self._species, self._moles):
+            if n_i <= 0.0:
+                continue
+            h_total += n_i * sp.enthalpy(T)
+        return float(h_total)
 
     def total_entropy(self, T: float, P: float = P_REF) -> float:
         """Total mixture entropy S_total = Σⱼ nⱼ·Sⱼ_mix(T,P) [J/K]."""
@@ -361,17 +381,23 @@ class Mixture:
         """Total mixture heat capacity Cp_total = Σⱼ nⱼ·Cpⱼ(T) [J/K].
 
         Used in the energy constraint row of the Jacobian (RP-1311 eq. 2.27).
+        Only positive-mole species are evaluated to avoid 0 × NaN propagation.
         """
-        cps = np.array([sp.specific_heat_capacity(T) for sp in self._species])
-        return float(np.sum(self._moles * cps))
+        cp_total = 0.0
+        for sp, n_i in zip(self._species, self._moles):
+            if n_i <= 0.0:
+                continue
+            cp_total += n_i * sp.specific_heat_capacity(T)
+        return float(cp_total)
 
     def total_gas_cp(self, T: float) -> float:
         """Total gas-phase heat capacity Σⱼ∈gas nⱼ·Cpⱼ(T) [J/K]."""
-        n_gas = self.n_gas
-        if n_gas == 0:
-            return 0.0
-        cps = np.array([sp.specific_heat_capacity(T) for sp in self._species[:n_gas]])
-        return float(np.sum(self._moles[:n_gas] * cps))
+        cp_total = 0.0
+        for sp, n_i in zip(self._species[: self.n_gas], self._moles[: self.n_gas]):
+            if n_i <= 0.0:
+                continue
+            cp_total += n_i * sp.specific_heat_capacity(T)
+        return float(cp_total)
 
     # ------------------------------------------------------------------
     # Log-space helpers (used by the Newton iteration)

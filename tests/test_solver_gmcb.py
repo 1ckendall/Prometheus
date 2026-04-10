@@ -223,15 +223,22 @@ def test_tp_converges(x_x2_problem):
 
 
 def test_history_default_full_capture_gmcb(x_x2_problem):
-    """G-McB should capture per-iteration history by default."""
-    sol = GordonMcBrideSolver(max_iterations=80).solve(x_x2_problem)
+    """G-McB should capture per-iteration history when explicitly enabled."""
+    sol = GordonMcBrideSolver(max_iterations=80, capture_history=True).solve(x_x2_problem)
     assert sol.converged
     assert sol.history is not None
     assert len(sol.history) == sol.iterations
 
 
+def test_history_off_by_default_gmcb(x_x2_problem):
+    """G-McB should NOT capture history by default (off for performance)."""
+    sol = GordonMcBrideSolver(max_iterations=80).solve(x_x2_problem)
+    assert sol.converged
+    assert sol.history is None
+
+
 def test_history_can_be_disabled_gmcb(x_x2_problem):
-    """G-McB should support disabling convergence-history capture."""
+    """G-McB should support disabling convergence-history capture explicitly."""
     sol = GordonMcBrideSolver(max_iterations=80, capture_history=False).solve(
         x_x2_problem
     )

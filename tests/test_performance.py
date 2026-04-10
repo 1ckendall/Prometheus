@@ -37,6 +37,7 @@ def test_solve_pair_calls_both_modes(monkeypatch):
         area_ratio=None,
         shifting=True,
         ambient_pressure=101325.0,
+        compute_profile=True,
     ):
         calls.append(
             {
@@ -45,6 +46,7 @@ def test_solve_pair_calls_both_modes(monkeypatch):
                 "area_ratio": area_ratio,
                 "shifting": shifting,
                 "ambient_pressure": ambient_pressure,
+                "compute_profile": compute_profile,
             }
         )
         return "shift" if shifting else "frozen"
@@ -69,6 +71,64 @@ def test_solve_pair_calls_both_modes(monkeypatch):
     assert calls[1]["shifting"] is False
     assert calls[0]["pe_pa"] == calls[1]["pe_pa"] == 120000.0
     assert calls[0]["ambient_pressure"] == calls[1]["ambient_pressure"] == 90000.0
+    assert calls[0]["compute_profile"] is True
+    assert calls[1]["compute_profile"] is True
+
+
+def test_solve_skips_profile_when_disabled(monkeypatch):
+    """solve(..., compute_profile=False) should not call _calculate_profile."""
+    solver = PerformanceSolver()
+    sp = _LogEntropyGas({"X": 1}, cp_over_r=4.0, s_ref_over_r=2.0, molar_mass_kg=0.02)
+    mix = Mixture([sp], np.array([1.0], dtype=float))
+
+    chamber = EquilibriumSolution(
+        mixture=mix,
+        temperature=3500.0,
+        pressure=2.0e6,
+        converged=True,
+        iterations=1,
+        residuals=np.zeros(0),
+        lagrange_multipliers=np.zeros(0),
+    )
+    throat = EquilibriumSolution(
+        mixture=mix,
+        temperature=3300.0,
+        pressure=1.0e6,
+        converged=True,
+        iterations=1,
+        residuals=np.zeros(0),
+        lagrange_multipliers=np.zeros(0),
+    )
+    exit_sol = EquilibriumSolution(
+        mixture=mix,
+        temperature=2800.0,
+        pressure=101325.0,
+        converged=True,
+        iterations=1,
+        residuals=np.zeros(0),
+        lagrange_multipliers=np.zeros(0),
+    )
+
+    monkeypatch.setattr(solver.solver, "solve", lambda _problem: chamber)
+    monkeypatch.setattr(solver, "_find_throat", lambda *_args, **_kwargs: throat)
+    monkeypatch.setattr(solver, "_solve_at_p", lambda *_args, **_kwargs: exit_sol)
+    monkeypatch.setattr(
+        solver,
+        "_calculate_profile",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected")),
+    )
+
+    problem = EquilibriumProblem(
+        reactants={sp: 1.0},
+        products=[sp],
+        problem_type=ProblemType.HP,
+        constraint1=sp.enthalpy(3500.0),
+        constraint2=2.0e6,
+        t_init=3500.0,
+    )
+
+    result = solver.solve(problem, pe_pa=101325.0, shifting=False, compute_profile=False)
+    assert result.profile == []
 
 
 def test_frozen_solve_reports_invalid_thermo_nonconvergence():

@@ -110,6 +110,12 @@ class ProPepUI(QMainWindow):
         self.solver_group = solver_group
         solver_group.triggered.connect(self.on_solver_changed)
 
+        # Convergence history toggle
+        self.action_capture_history = menu_options.addAction("Record Convergence History")
+        self.action_capture_history.setCheckable(True)
+        self.action_capture_history.setChecked(False)
+        self.action_capture_history.triggered.connect(self._on_capture_history_toggled)
+
         # Unit System
         units_menu = menu_options.addMenu("Select Unit System")
         action_si = units_menu.addAction("SI (Default)")
@@ -131,15 +137,21 @@ class ProPepUI(QMainWindow):
             MajorSpeciesSolver,
         )
 
+        capture = self.action_capture_history.isChecked()
         text = action.text()
         if "Gordon-McBride" in text:
-            self.engine_dock.solver = GordonMcBrideSolver()
+            self.engine_dock.solver = GordonMcBrideSolver(capture_history=capture)
         elif "Major-Species Newton" in text:
-            self.engine_dock.solver = MajorSpeciesSolver()
+            self.engine_dock.solver = MajorSpeciesSolver(capture_history=capture)
         else:
             self.statusBar().showMessage(f"Unknown solver selection: {text}", 5000)
             return
         self.statusBar().showMessage(f"Solver engine changed to {text}", 3000)
+
+    def _on_capture_history_toggled(self, checked: bool) -> None:
+        """Propagate the history-capture setting to the active solver."""
+        if hasattr(self, "engine_dock"):
+            self.engine_dock.solver.capture_history = checked
 
     @staticmethod
     def _safe_float(text: str, default: float = 0.0) -> float:

@@ -145,8 +145,13 @@ class PerformanceSolver:
         area_ratio: Optional[float] = None,
         shifting: bool = True,
         ambient_pressure: float = 101325.0,
+        compute_profile: bool = True,
     ) -> RocketPerformanceResult:
-        """Calculate performance from chamber to a fixed exit pressure or area ratio."""
+        """Calculate performance from chamber to a fixed exit pressure or area ratio.
+
+        Set ``compute_profile=False`` to skip intermediate expansion states and
+        avoid extra SP/frozen solves when profiling or batch-sweeping cases.
+        """
         if pe_pa is None and area_ratio is None:
             raise ValueError("Must specify either exit pressure or area ratio.")
 
@@ -215,8 +220,12 @@ class PerformanceSolver:
         else:
             calc_area_ratio = area_ratio
 
-        # 5. Profile for plotting (10 points from Pc to Pe)
-        profile = self._calculate_profile(chamber, exit_sol, shifting)
+        # 5. Optional profile for plotting (additional SP/frozen solves)
+        profile = (
+            self._calculate_profile(chamber, exit_sol, shifting)
+            if compute_profile
+            else []
+        )
 
         return RocketPerformanceResult(
             chamber=chamber,
@@ -238,6 +247,7 @@ class PerformanceSolver:
         pe_pa: Optional[float] = None,
         area_ratio: Optional[float] = None,
         ambient_pressure: float = 101325.0,
+        compute_profile: bool = True,
     ) -> RocketPerformanceComparison:
         """Solve both shifting and frozen expansions for the same chamber case.
 
@@ -246,6 +256,8 @@ class PerformanceSolver:
             pe_pa: Optional exit pressure in Pa.
             area_ratio: Optional nozzle area ratio Ae/At.
             ambient_pressure: Ambient back pressure in Pa for actual Isp.
+            compute_profile: Whether to compute intermediate chamber-to-exit
+                profile states for plotting.
 
         Returns:
             Paired results for shifting and frozen expansion states.
@@ -259,6 +271,7 @@ class PerformanceSolver:
             area_ratio=area_ratio,
             shifting=True,
             ambient_pressure=ambient_pressure,
+            compute_profile=compute_profile,
         )
         frozen_result = self.solve(
             problem,
@@ -266,6 +279,7 @@ class PerformanceSolver:
             area_ratio=area_ratio,
             shifting=False,
             ambient_pressure=ambient_pressure,
+            compute_profile=compute_profile,
         )
         return RocketPerformanceComparison(
             shifting=shifting_result,
@@ -283,6 +297,7 @@ class PerformanceSolver:
         max_atoms: int = 20,
         t_init: float = 3500.0,
         ambient_pressure: float = 101325.0,
+        compute_profile: bool = True,
     ) -> RocketPerformanceComparison:
         """Convenience entry point: solve rocket performance from a PropellantMixture.
 
@@ -312,6 +327,8 @@ class PerformanceSolver:
                 iteration [K].  Default 3500 K.
             ambient_pressure: Back pressure [Pa] for the actual-Isp
                 calculation.  Default 101 325 Pa (1 atm).
+            compute_profile: Whether to compute intermediate chamber-to-exit
+                profile states for plotting.
 
         Returns:
             :class:`RocketPerformanceComparison` with paired shifting and
@@ -377,6 +394,7 @@ class PerformanceSolver:
             pe_pa=pe_pa,
             area_ratio=area_ratio,
             ambient_pressure=ambient_pressure,
+            compute_profile=compute_profile,
         )
 
     def _calculate_profile(self, chamber, exit_sol, shifting):
@@ -514,8 +532,16 @@ class PerformanceSolver:
         if not shifting:
             return frozen_throat
 
-        # 2. Newton-Raphson refinement for shifting equilibrium
-        def get_mach_error(p, guess):
+        # 2. Bisection refinement for shifting equilibrium.
+        #
+        # A pure Newton-Raphson loop requires a smooth dMach/dP estimate, but
+        # the shifting equilibrium solver (especially MajorSpeciesSolver) can
+        # produce Mach values that vary non-monotonically at the ~1e-3 level
+        # across individual Newton steps, making numerical derivatives
+        # unreliable and causing oscillation.  Bisection is unconditionally
+        # convergent for a monotone Mach(P) function and remains robust even
+        # when individual evaluations are slightly noisy.
+        def get_mach(p, guess):
             sol = self._solve_at_p(
                 chamber,
                 p,
@@ -525,39 +551,62 @@ class PerformanceSolver:
             )
             if not sol.converged:
                 return float("nan"), sol
-            # v = sqrt(2 * (Hc_mass - H_mass))
             dH_mass = chamber.total_enthalpy - sol.total_enthalpy
             v = math.sqrt(max(0.0, 2 * dH_mass))
-            mach = v / sol.speed_of_sound
-            return mach - 1.0, sol
+            return v / sol.speed_of_sound, sol
 
-        p_curr = p_guess
-        last_sol = frozen_throat
+        # Bracket the sonic point.  The frozen throat (subsonic side) gives
+        # a good initial bracket; expand the lower bound until we find a
+        # supersonic point or fall back to the frozen solution.
+        p_low = 0.1 * chamber.pressure
+        p_high = p_guess
 
-        for _ in range(10):
-            err, sol = get_mach_error(p_curr, last_sol)
-            if math.isnan(err):
+        mach_high, sol_high = get_mach(p_high, frozen_throat)
+        if math.isnan(mach_high):
+            return frozen_throat  # can't evaluate at frozen guess
+
+        # Ensure p_high is subsonic (Mach < 1) and p_low is supersonic.
+        # Mach increases as P decreases, so we scan downward for a supersonic
+        # bracket point.
+        if mach_high >= 1.0:
+            # Frozen throat is already supersonic — scan upward for p_high
+            p_scan = p_high
+            sol_scan = sol_high
+            for _ in range(6):
+                p_scan = min(0.95 * chamber.pressure, p_scan * 1.5)
+                mach_scan, sol_scan = get_mach(p_scan, sol_scan)
+                if not math.isnan(mach_scan) and mach_scan < 1.0:
+                    p_high = p_scan
+                    sol_high = sol_scan
+                    mach_high = mach_scan
+                    break
+            else:
+                return frozen_throat  # couldn't bracket
+
+        mach_low, sol_low = get_mach(p_low, frozen_throat)
+        if math.isnan(mach_low) or mach_low <= 1.0:
+            # Try to find a supersonic bracket near the frozen guess
+            p_low = p_guess * 0.9
+            mach_low, sol_low = get_mach(p_low, frozen_throat)
+            if math.isnan(mach_low) or mach_low <= 1.0:
+                return frozen_throat
+
+        last_sol = sol_high
+        for _ in range(30):
+            if (p_high - p_low) / chamber.pressure < 1e-6:
                 break
-            last_sol = sol
-
-            if abs(err) < 1e-5:
+            p_mid = 0.5 * (p_low + p_high)
+            mach_mid, sol_mid = get_mach(p_mid, last_sol)
+            if math.isnan(mach_mid):
                 break
+            last_sol = sol_mid
+            if mach_mid > 1.0:
+                p_low = p_mid
+            else:
+                p_high = p_mid
+                sol_high = sol_mid
 
-            # Numerical derivative d(Mach)/dP
-            dp = p_curr * 0.01
-            err_p, _ = get_mach_error(p_curr + dp, last_sol)
-            dmdp = (err_p - err) / dp
-
-            if abs(dmdp) < 1e-20:
-                break
-
-            step = err / dmdp
-            # Damp the step to prevent jumping out of range
-            p_curr -= max(-0.1 * chamber.pressure, min(0.1 * chamber.pressure, step))
-            # Clamp P between reasonable bounds for throat
-            p_curr = max(0.1 * chamber.pressure, min(0.95 * chamber.pressure, p_curr))
-
-        return last_sol
+        return sol_high
 
     def _find_throat_frozen(self, chamber: EquilibriumSolution) -> EquilibriumSolution:
         """Binary search for frozen throat (fast warm-start for shifting solver)."""

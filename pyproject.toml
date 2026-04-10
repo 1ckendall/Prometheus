@@ -82,6 +82,9 @@ exclude = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: end-to-end solver tests against real thermodynamic data (may be slow)",
+]
 
 [tool.isort]
 profile = "black"

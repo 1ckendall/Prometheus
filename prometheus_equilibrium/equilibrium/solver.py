@@ -131,7 +131,7 @@ class EquilibriumSolver(ABC):
         self,
         max_iterations: int = 50,
         tolerance: float = 5e-6,
-        capture_history: bool = True,
+        capture_history: bool = False,
         history_stride: int = 1,
     ) -> None:
         self.max_iterations = max_iterations
@@ -204,6 +204,7 @@ class EquilibriumSolver(ABC):
         em: "ElementMatrix",
         pi: np.ndarray,
         T: float,
+        g0_arr: Optional[np.ndarray] = None,
     ) -> bool:
         """Activate or deactivate condensed phases based on element potentials.
 
@@ -219,6 +220,9 @@ class EquilibriumSolver(ABC):
             em: Element matrix.
             pi: Current element potentials from the Newton solve, shape (S,).
             T: Current temperature [K].
+            g0_arr: Optional precomputed g°ⱼ/RT for all species (indexed by
+                mixture position). When supplied the per-species thermo call
+                is skipped for condensed species.
 
         Returns:
             True if the condensed phase set changed (caller should restart
@@ -243,7 +247,7 @@ class EquilibriumSolver(ABC):
             if mixture.moles[global_idx] > 0.0:
                 continue  # already active
             sp = mixture.species[global_idx]
-            mu_c = sp.reduced_gibbs(T)
+            mu_c = g0_arr[global_idx] if g0_arr is not None else sp.reduced_gibbs(T)
             assigned = float(A_cnd[i, :] @ pi)
             val = mu_c - assigned
             if val < best_val:
@@ -319,7 +323,7 @@ class _ReactionAdjustmentBase(EquilibriumSolver, ABC):
         max_iterations: int = 50,
         tolerance: float = 5e-6,
         minor_threshold: float = 1e-2,
-        capture_history: bool = True,
+        capture_history: bool = False,
         history_stride: int = 1,
     ) -> None:
         super().__init__(max_iterations, tolerance, capture_history, history_stride)
@@ -545,6 +549,25 @@ class _ReactionAdjustmentBase(EquilibriumSolver, ABC):
                 T = T_mid
             else:
                 T = T_newton
+
+        # Correct T for the residual energy error without re-solving composition.
+        #
+        # After the outer loop declares convergence at |dlnT| < 1e-4 the
+        # HP/SP residual f = Σ nⱼ Hⱼ(T) − H₀ can still be O(500 J/kg)
+        # (~0.05 %).  This is within the declared tolerance but propagates
+        # through the isentropic nozzle expansion to give up to ~0.6 % Isp
+        # error for some CH4/O2 conditions.
+        #
+        # A single Newton correction ΔT = −f / (dH/dT) = −f / Cp applied
+        # directly to T (without re-solving the composition) removes the
+        # residual to near machine precision: by the mean-value theorem,
+        # Σ nⱼ Hⱼ(T + ΔT) ≈ Σ nⱼ Hⱼ(T) + Cp·ΔT = H(T) − f = H₀.  The
+        # composition is unchanged so the correction is exact to O(ΔT²).
+        if converged_outer and not math.isnan(f) and abs(fp) > 1e-30:
+            dT_corr = -f / fp
+            # Guard: only apply if the correction is small (sanity check)
+            if abs(dT_corr) < 1.0:
+                T = T + dT_corr
 
         return mixture, T, pi, n_outer + 1, converged_outer, history
 
@@ -1559,6 +1582,15 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
         A_gas = em.gas_rows()  # (n_gas, S) — fixed layout
         history: List[ConvergenceStep] = []
 
+        # Precompute values that are constant throughout the inner loop.
+        # g°/RT: T is fixed, so one evaluation per species suffices.
+        g0_arr = np.array(
+            [sp.reduced_gibbs(T) for sp in mixture.species], dtype=float
+        )
+        g0_gas = g0_arr[:n_gas]
+        # ln(P/P°): P is constant for the entire problem.
+        _ln_P_ratio = math.log(P / _P_REF)
+
         _log_hyb = logger.bind(solver="MajorSpecies")
         self._last_failure_reason = None
         self._last_step_norm = float("inf")
@@ -1571,7 +1603,9 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
 
             # Reduced chemical potentials for all gas species
             mu_gas = GordonMcBrideSolver._reduced_chemical_potentials(
-                mixture.species[:n_gas], n_gas_arr, n_gas_total, T, P
+                mixture.species[:n_gas], n_gas_arr, n_gas_total, T, P,
+                g0_arr=g0_gas,
+                ln_P_ratio=_ln_P_ratio,
             )
 
             # --- 1. Basis selection + major/minor split ---
@@ -1635,12 +1669,8 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
             A_cnd = em.condensed_rows()
             if nc > 0:
                 A_cnd_act = A_cnd[active_cnd_local, :]  # (nc, S)
-                mu_cnd = np.array(
-                    [
-                        mixture.species[n_gas + i].reduced_gibbs(T)
-                        for i in active_cnd_local
-                    ]
-                )
+                cnd_global_idx = [n_gas + i for i in active_cnd_local]
+                mu_cnd = g0_arr[cnd_global_idx]
             else:
                 A_cnd_act = np.zeros((0, S))
                 mu_cnd = np.zeros(0)
@@ -1671,7 +1701,7 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
             try:
                 delta_x = np.linalg.solve(G[:, :-1], G[:, -1])
             except np.linalg.LinAlgError:
-                if self._manage_condensed_phases(mixture, em, pi, T):
+                if self._manage_condensed_phases(mixture, em, pi, T, g0_arr=g0_arr):
                     phase_changed_counter += 1
                     if phase_changed_counter <= 3 * S:
                         continue
@@ -1702,11 +1732,14 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
             # --- 5. Minor gas species: analytical update from π ---
             n_gas_updated = float(mixture.gas_moles().sum())
             self._update_minor_from_potentials(
-                minor_gas_indices, mixture, em, pi, n_gas_updated, T, P
+                minor_gas_indices, mixture, em, pi, n_gas_updated, T, P,
+                g0_arr=g0_arr,
+                ln_P_ratio=_ln_P_ratio,
+                gas_only=True,
             )
 
             # --- 6. Condensed phase management ---
-            changed = self._manage_condensed_phases(mixture, em, pi, T)
+            changed = self._manage_condensed_phases(mixture, em, pi, T, g0_arr=g0_arr)
             if changed:
                 phase_changed_counter += 1
                 if phase_changed_counter > 3 * S:
@@ -1728,23 +1761,19 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
                 len(minor_gas_indices),
             )
 
-            # Keep the same step metric used by the convergence criterion.
-            _step_norm = max(
-                max(
-                    (
-                        abs(mixture.moles[idx] * d_i)
-                        / max(float(mixture.gas_moles().sum()), 1e-300)
-                        for idx, d_i in zip(major_gas_indices, delta_ln_nj_maj)
-                        if mixture.moles[idx] > 0.0
-                    ),
-                    default=0.0,
-                ),
-                abs(float(delta_ln_n)),
-            )
-            self._last_step_norm = float(_step_norm)
-            if self._check_convergence(
-                mixture, delta_ln_nj_maj, major_gas_indices, delta_ln_n, element_res
-            ):
+            # Vectorised convergence check (avoids repeated gas_moles().sum() calls).
+            _n_gas_chk = float(mixture.gas_moles().sum())
+            _n_maj_chk = mixture.moles[major_gas_indices]
+            _valid = _n_maj_chk > 0.0
+            if _valid.any():
+                _step_maj = float(
+                    np.max(np.abs(_n_maj_chk[_valid] * delta_ln_nj_maj[_valid]))
+                ) / max(_n_gas_chk, 1e-300)
+            else:
+                _step_maj = 0.0
+            _step_norm = max(_step_maj, abs(float(delta_ln_n)))
+            self._last_step_norm = _step_norm
+            if _step_norm < self.tolerance:
                 _log_hyb.info("exit converged=True iters={} T={:.1f}", n_inner + 1, T)
                 _tp_converged = True
                 break
@@ -1760,20 +1789,60 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
 
         # Final exact update: set every gas species to its analytical
         # equilibrium value from the converged π.
+        #
+        # This undamped single-shot update is essential for outer-loop
+        # convergence: when the inner loop starts from a flat composition
+        # (e.g. first outer iteration) it may exit before fully converging,
+        # and this step brings the composition to the correct vicinity for
+        # the next outer T so subsequent inner calls converge quickly.
+        #
+        # The update can inflate total gas moles (Σ cⱼ ≠ 1 when π is not
+        # exact), disturbing element balance.  A Newton correction pass
+        # immediately after restores element conservation.
         _A_ex = em.matrix
         _n_gas_now = float(mixture.gas_moles().sum())
         _ln_n_ex = math.log(max(_n_gas_now, 1e-300))
-        _ln_P_ex = math.log(P / _P_REF)
         for _j in range(mixture.n_gas):
-            _sp = mixture.species[_j]
             _ln_eq = (
-                float(_A_ex[_j, :] @ pi) - _sp.reduced_gibbs(T) - _ln_P_ex + _ln_n_ex
+                float(_A_ex[_j, :] @ pi) - g0_arr[_j] - _ln_P_ratio + _ln_n_ex
             )
             _ln_eq = min(_ln_eq, 700.0)
             if _ln_eq - _ln_n_ex <= _LOG_CONC_TOL:
                 mixture.moles[_j] = 0.0
             else:
                 mixture.moles[_j] = math.exp(_ln_eq)
+
+        # Element-balance correction: Newton steps to restore conservation.
+        #
+        # After the exact update the element abundances Aᵀ·n may deviate
+        # from b₀ because Σⱼ cⱼ ≠ 1 at non-exact π.  We solve the S×S
+        # linearised system
+        #
+        #   (A_gas^T diag(n_gas) A_gas) δπ = b₀ − Aᵀ·n
+        #
+        # and apply the correction n_j ← n_j · exp(Aⱼ · δπ) to gas
+        # species only (condensed species are managed separately).
+        # Iterate until the relative element-balance error is < 1e-8.
+        _A_gas_ex = _A_ex[:n_gas]  # (n_gas, S)
+        for _ in range(4):
+            _b_curr = _A_ex.T @ mixture.moles  # includes condensed
+            _b_err = b0 - _b_curr
+            _rel_err = float(
+                np.max(np.abs(_b_err) / np.maximum(np.abs(b0), 1e-30))
+            )
+            if _rel_err <= 1e-8:
+                break
+            _n_gas_upd = mixture.moles[:n_gas]
+            _J_corr = _A_gas_ex.T @ (
+                _A_gas_ex * np.maximum(_n_gas_upd, 1e-300)[:, None]
+            )
+            try:
+                _d_pi_corr = np.linalg.solve(_J_corr, _b_err)
+            except np.linalg.LinAlgError:
+                break  # leave uncorrected if system is degenerate
+            _ln_corr = _A_gas_ex @ _d_pi_corr  # (n_gas,)
+            _active = _n_gas_upd > 0.0
+            mixture.moles[:n_gas][_active] *= np.exp(_ln_corr[_active])
 
         return mixture, pi, n_inner + 1, _tp_converged, history
 
@@ -1875,6 +1944,9 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
         n_total: float,
         T: float,
         P: float,
+        g0_arr: Optional[np.ndarray] = None,
+        ln_P_ratio: Optional[float] = None,
+        gas_only: bool = False,
     ) -> None:
         """Set minor species mole amounts analytically from element potentials.
 
@@ -1901,27 +1973,42 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
             Current total gas moles Σ nⱼ (gas only), used in the ln(n) term.
         T : float
         P : float
+        g0_arr : np.ndarray, optional
+            Precomputed g°ⱼ/RT for all species (indexed by mixture position).
+            When supplied the per-species thermo call is skipped.
+        ln_P_ratio : float, optional
+            Precomputed ln(P/P°). When supplied the log call is skipped.
+        gas_only : bool
+            When True, all indices in *minor_indices* are assumed to be
+            gas-phase; the condensed-species filter step is skipped.
         """
         if not minor_indices:
             return
 
         A = element_matrix.matrix
         ln_n_gas = math.log(max(n_total, 1e-300))
-        ln_P_ratio = math.log(P / _P_REF)
+        if ln_P_ratio is None:
+            ln_P_ratio = math.log(P / _P_REF)
 
-        idx = np.array(minor_indices, dtype=int)
+        idx = np.asarray(minor_indices, dtype=int)
         if idx.size == 0:
             return
 
-        gas_idx = idx[
-            np.array([mixture.species[i].condensed == 0 for i in idx], dtype=bool)
-        ]
+        if gas_only:
+            gas_idx = idx
+        else:
+            gas_idx = idx[
+                np.array([mixture.species[i].condensed == 0 for i in idx], dtype=bool)
+            ]
         if gas_idx.size == 0:
             return
 
-        g0 = np.array(
-            [mixture.species[i].reduced_gibbs(T) for i in gas_idx], dtype=float
-        )
+        if g0_arr is not None:
+            g0 = g0_arr[gas_idx]
+        else:
+            g0 = np.array(
+                [mixture.species[i].reduced_gibbs(T) for i in gas_idx], dtype=float
+            )
         ln_n_eq = A[gas_idx, :] @ pi - g0 - ln_P_ratio + ln_n_gas
 
         current = mixture.moles[gas_idx]
@@ -1984,12 +2071,10 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
         )
 
         ln_n_new = math.log(max(n_gas_total, 1e-300)) + lam * delta_ln_n
-        for idx, ln_ni, d_i in zip(major_gas_indices, ln_nj_maj, delta_ln_nj_maj):
-            new_ln = ln_ni + lam * d_i
-            if new_ln - ln_n_new <= _LOG_CONC_TOL:
-                mixture.moles[idx] = 0.0
-            else:
-                mixture.moles[idx] = math.exp(new_ln)
+        new_ln_maj = ln_nj_maj + lam * delta_ln_nj_maj
+        active_maj = (new_ln_maj - ln_n_new) > _LOG_CONC_TOL
+        mixture.moles[major_gas_indices[~active_maj]] = 0.0
+        mixture.moles[major_gas_indices[active_maj]] = np.exp(new_ln_maj[active_maj])
 
         for local_idx, delta in zip(active_cnd_local, delta_n_cnd):
             global_idx = n_gas + local_idx
@@ -2092,7 +2177,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
         self,
         max_iterations: int = 300,
         tolerance: float = 1e-4,
-        capture_history: bool = True,
+        capture_history: bool = False,
         history_stride: int = 1,
     ) -> None:
         super().__init__(
@@ -2761,6 +2846,8 @@ class GordonMcBrideSolver(EquilibriumSolver):
         n_gas_total: float,
         T: float,
         P: float,
+        g0_arr: Optional[np.ndarray] = None,
+        ln_P_ratio: Optional[float] = None,
     ) -> np.ndarray:
         """Compute μⱼ = g°ⱼ/RT + ln(nⱼ/n_gas) + ln(P/P°) for gas species.
 
@@ -2770,23 +2857,29 @@ class GordonMcBrideSolver(EquilibriumSolver):
             n_gas_total: Total gas moles Σⱼ_gas nⱼ.
             T: Temperature [K].
             P: Pressure [Pa].
+            g0_arr: Optional precomputed g°ⱼ/RT for all gas species. When
+                supplied (e.g. from a caller that iterates at fixed T), the
+                per-species thermo evaluation is skipped entirely.
+            ln_P_ratio: Optional precomputed ln(P/P°). When supplied the
+                log call is skipped.
 
         Returns:
             Reduced chemical potentials, shape (n_gas,).
         """
         ln_n = math.log(max(n_gas_total, 1e-300))
-        ln_P_ratio = math.log(P / _P_REF)
+        if ln_P_ratio is None:
+            ln_P_ratio = math.log(P / _P_REF)
+        if g0_arr is None:
+            g0_arr = np.array([sp.reduced_gibbs(T) for sp in gas_species])
         # For zero-moles species, clamp ln(nj/n) to _LOG_CONC_TOL (≈ -18.4).
         # Using ln(1e-300) ≈ -690 would produce delta_ln_nj ≈ 690 and collapse
         # the damping factor to ~0.003 on every iteration, preventing convergence.
-        return np.array(
-            [
-                sp.reduced_gibbs(T)
-                + (math.log(n_j) - ln_n if n_j > 0.0 else _LOG_CONC_TOL)
-                + ln_P_ratio
-                for sp, n_j in zip(gas_species, n_gas_arr)
-            ]
+        ln_nj_over_n = np.where(
+            n_gas_arr > 0.0,
+            np.log(np.where(n_gas_arr > 0.0, n_gas_arr, 1.0)) - ln_n,
+            _LOG_CONC_TOL,
         )
+        return g0_arr + ln_nj_over_n + ln_P_ratio
 
     @staticmethod
     def _compute_damping(
