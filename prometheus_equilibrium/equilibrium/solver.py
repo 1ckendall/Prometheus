@@ -131,7 +131,7 @@ class EquilibriumSolver(ABC):
         self,
         max_iterations: int = 50,
         tolerance: float = 5e-6,
-        capture_history: bool = False,
+        capture_history: bool = True,
         history_stride: int = 1,
     ) -> None:
         self.max_iterations = max_iterations
@@ -323,7 +323,7 @@ class _ReactionAdjustmentBase(EquilibriumSolver, ABC):
         max_iterations: int = 50,
         tolerance: float = 5e-6,
         minor_threshold: float = 1e-2,
-        capture_history: bool = False,
+        capture_history: bool = True,
         history_stride: int = 1,
     ) -> None:
         super().__init__(max_iterations, tolerance, capture_history, history_stride)
@@ -2177,7 +2177,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
         self,
         max_iterations: int = 300,
         tolerance: float = 1e-4,
-        capture_history: bool = False,
+        capture_history: bool = True,
         history_stride: int = 1,
     ) -> None:
         super().__init__(

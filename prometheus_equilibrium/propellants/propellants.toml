@@ -147,7 +147,7 @@ aliases = ["Zn"]
 elements = {Zn = 1.000000}
 dHf298 = 0.000000
 density = 7138.647425
-roles = ["oxidizer"]
+roles = ["metal", "fuel"]
 
 [[ingredient]]
 id = "TEPANOL"

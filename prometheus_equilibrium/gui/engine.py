@@ -446,15 +446,55 @@ class EngineDock(QDockWidget):
             _perf_row("Frozen", frozen),
             _perf_row("Shifting", shifting),
             "",
-            "[Chamber Species Moles]",
-            "Species                      Moles",
-            "----------------------------------------",
         ]
 
-        species_moles = list(zip(chamber.mixture.species, chamber.mixture.moles))
-        for sp, n in sorted(species_moles, key=lambda x: x[1], reverse=True):
-            if n > 1e-6:
-                lines.append(f"{str(sp):<27} {n:>12.4e}")
+        def _species_column(header, sol):
+            rows = [
+                "",
+                f"[{header}]",
+                f"{'Species':<27} {'Moles':>12}",
+                "----------------------------------------",
+            ]
+            for sp, n in sorted(
+                zip(sol.mixture.species, sol.mixture.moles),
+                key=lambda x: x[1],
+                reverse=True,
+            ):
+                if n > 1e-6:
+                    rows.append(f"{str(sp):<27} {n:>12.4e}")
+            return rows
+
+        def _species_table(header, chamber_sol, throat_sol, exit_sol):
+            def moles_dict(sol):
+                return {str(sp): n for sp, n in zip(sol.mixture.species, sol.mixture.moles)}
+
+            ch_d = moles_dict(chamber_sol)
+            th_d = moles_dict(throat_sol)
+            ex_d = moles_dict(exit_sol)
+
+            all_species = {
+                sp
+                for d in (ch_d, th_d, ex_d)
+                for sp, n in d.items()
+                if n > 1e-6
+            }
+            sorted_species = sorted(all_species, key=lambda s: ch_d.get(s, 0.0), reverse=True)
+
+            rows = [
+                "",
+                f"[{header}]",
+                f"{'Species':<27} {'Chamber':>12} {'Throat':>12} {'Exit':>12}",
+                "-------------------------------------------------------------------",
+            ]
+            for sp_name in sorted_species:
+                ch = ch_d.get(sp_name, 0.0)
+                th = th_d.get(sp_name, 0.0)
+                ex = ex_d.get(sp_name, 0.0)
+                rows.append(f"{sp_name:<27} {ch:>12.4e} {th:>12.4e} {ex:>12.4e}")
+            return rows
+
+        lines.extend(_species_column("Frozen Species Moles", chamber))
+        lines.extend(_species_table("Shifting Species Moles", chamber, shifting.throat, shifting.exit))
 
         lines.extend(
             [
