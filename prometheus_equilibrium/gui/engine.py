@@ -284,7 +284,7 @@ class EngineDock(QDockWidget):
         self.refresh_pressure_labels()
 
         # Solver components
-        self.solver = GordonMcBrideSolver()
+        self.solver = GordonMcBrideSolver(capture_history=False)
         self.worker = None
         self._last_report_payload = None
 

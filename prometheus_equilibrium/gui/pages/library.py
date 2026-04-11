@@ -54,9 +54,9 @@ class LibraryPage(QWidget):
         filter_lay.addWidget(self.db_filter)
         layout.addLayout(filter_lay)
 
-        self.db_table = QTableWidget(0, 7)
+        self.db_table = QTableWidget(0, 8)
         self.db_table.setHorizontalHeaderLabels(
-            ["Name", "ID", "CAS", "Aliases", "Roles", "Density (g/cc)", "dHf298 (J/mol)"]
+            ["Name", "ID", "CAS", "Aliases", "Roles", "Density (g/cc)", "dHf298 (J/mol)", "Source"]
         )
         self.db_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.db_table.horizontalHeader().setStretchLastSection(True)
@@ -84,10 +84,11 @@ class LibraryPage(QWidget):
             cas = p_data.get("cas", "")
             aliases = ", ".join(p_data.get("aliases", []))
             name = p_data.get("name", prop_id)
+            source = p_data.get("source", "")
 
             # Store all searchable text in column 0 tooltip so filter_db_table
             # can search hidden metadata without extra hidden columns.
-            cols = [name, prop_id, cas, aliases, roles, density_str, dhf298_str]
+            cols = [name, prop_id, cas, aliases, roles, density_str, dhf298_str, source]
             for col_idx, text in enumerate(cols):
                 item = QTableWidgetItem(str(text))
                 item.setFlags(item.flags() ^ Qt.ItemIsEditable)

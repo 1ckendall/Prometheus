@@ -449,8 +449,9 @@ class PropellantDatabase:
             # (always present after load()) so thermo_id-based entries also get a formula.
             elements = rec.get("elements") or getattr(rec.get("_species"), "elements", {})
             formula = _elements_to_hill(elements) if elements else ""
+            source = rec.get("source", "")
             display = name
-            parts = [ing_id, name, cas, formula] + list(aliases)
+            parts = [ing_id, name, cas, formula, source] + list(aliases)
             search_text = " ".join(p for p in parts if p).lower()
             items.append({"id": ing_id, "display": display, "search_text": search_text})
         return items
