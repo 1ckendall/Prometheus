@@ -105,7 +105,7 @@ class CEAParser(NASA9Parser):
                 break
 
             try:
-                n_intervals, elements, phase = parse_nasa9_descriptor(lines[i])
+                n_intervals, elements, phase = parse_nasa9_descriptor(lines[i], cea_name)
             except ValueError:
                 i += 1
                 continue

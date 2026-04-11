@@ -347,7 +347,7 @@ class Burcat9Parser(NASA9Parser):
             if i >= n:
                 break
             try:
-                n_intervals, elements, phase = parse_nasa9_descriptor(lines[i])
+                n_intervals, elements, phase = parse_nasa9_descriptor(lines[i], alias)
             except ValueError:
                 i += 1
                 n_skipped += 1

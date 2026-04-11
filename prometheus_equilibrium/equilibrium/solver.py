@@ -275,6 +275,14 @@ class EquilibriumSolver(ABC):
         are excluded for this Newton step. Species that become valid as T changes
         are reintroduced with zero moles and can then grow through the Newton
         update.
+
+        When a condensed species leaves the valid set with non-zero moles (a
+        phase transition), its moles are transferred to the first valid condensed
+        species in the pool with the same elemental composition.  This preserves
+        element conservation across phase-transition boundaries and prevents the
+        K-element imbalance that would otherwise occur when e.g. K₂CO₃(L) [valid
+        ≥ 1173 K] hands off to K₂CO₃(b) [valid 693–1173 K] during nozzle
+        expansion.
         """
         valid_species = [
             sp for sp in species_pool if math.isfinite(sp.reduced_gibbs(T))
@@ -284,10 +292,27 @@ class EquilibriumSolver(ABC):
                 f"No product species have valid thermodynamic data at T={T:.2f} K."
             )
 
+        # Phase-transition handoff: collect moles from condensed species that are
+        # leaving the valid set so they can be assigned to the incoming partner.
+        condensed_handoff: dict = {}
+        for sp, n in zip(mixture.species, mixture.moles):
+            n_f = float(n)
+            if sp.condensed and n_f > 0.0 and not math.isfinite(sp.reduced_gibbs(T)):
+                key = tuple(sorted(sp.elements.items()))
+                condensed_handoff[key] = condensed_handoff.get(key, 0.0) + n_f
+
         prev_moles = {sp: float(n) for sp, n in zip(mixture.species, mixture.moles)}
-        new_moles = np.array(
-            [prev_moles.get(sp, 0.0) for sp in valid_species], dtype=float
-        )
+        new_moles_list: List[float] = []
+        for sp in valid_species:
+            n = prev_moles.get(sp, 0.0)
+            # Absorb orphaned moles from an out-of-range predecessor with the
+            # same composition (first matching partner takes all).
+            if sp.condensed and n == 0.0:
+                key = tuple(sorted(sp.elements.items()))
+                if key in condensed_handoff:
+                    n = condensed_handoff.pop(key)
+            new_moles_list.append(n)
+        new_moles = np.array(new_moles_list, dtype=float)
 
         # Ensure at least one gas species has positive moles for log terms.
         n_gas = sum(1 for sp in valid_species if sp.condensed == 0)

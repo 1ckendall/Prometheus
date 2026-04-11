@@ -339,12 +339,36 @@ def dedup_id(candidate: str, seen: Dict[str, int]) -> str:
     return candidate if count == 0 else f"{candidate}_{count + 1}"
 
 
-def phase_from_cond_flag(cond_flag: str) -> str:
-    """Map a CEA condensed-flag character to G / L / S."""
+def phase_from_cond_flag(cond_flag: str, species_name: str = "") -> str:
+    """Map a CEA condensed-flag number and species name to G / L / S.
+
+    The field at col 50 of the NASA-9/CEA descriptor line is the *ordinal* of
+    the condensed phase (0 or blank = gas; 1 = first condensed form; 2 = second
+    condensed form; …).  It does **not** encode solid vs liquid directly — for
+    example K₂CO₃(b) is the second condensed form (flag=2) yet it is a solid,
+    while K₂CO₃(L) is the third (flag=3) and is the liquid.
+
+    The S/L distinction is therefore determined from *species_name*: a name
+    whose trailing parenthetical is ``(L)``, ``(l)``, ``(liq)``, or
+    ``(liquid)`` — optionally followed by whitespace — is liquid; all other
+    condensed phases are solid.
+
+    Args:
+        cond_flag: The single character (or short string) extracted from col 50
+            of the descriptor line.
+        species_name: Full CEA/Burcat species name, e.g. ``"K2CO3(b)"`` or
+            ``"K2CO3(L)"``.  If empty the method falls back to ``"S"`` for any
+            non-gas flag.
+
+    Returns:
+        ``"G"``, ``"L"``, or ``"S"``.
+    """
     c = str(cond_flag).strip()
     if c in ("", "0"):
         return "G"
-    if c == "2":
+    # Condensed: use the species name to distinguish liquid from solid.
+    # Match a trailing parenthetical like (L), (l), (liq), (liquid).
+    if species_name and re.search(r"\(l(?:iq(?:uid)?)?\)\s*$", species_name, re.IGNORECASE):
         return "L"
     return "S"
 
@@ -461,17 +485,23 @@ def rescue_nasa9_elements(line: str) -> Dict[str, float]:
     return elems
 
 
-def parse_nasa9_descriptor(line: str) -> Tuple[int, Dict[str, float], str]:
+def parse_nasa9_descriptor(
+    line: str, species_name: str = ""
+) -> Tuple[int, Dict[str, float], str]:
     """Parse a NASA-9 card-2 / CEA descriptor line.
 
     The format is shared between Burcat9 and CEA source files:
 
     * cols 0–1  : n_intervals (integer, may be preceded by whitespace)
     * cols 10+  : 5 × (A2 element symbol + F6.2 count)
-    * col  50   : condensed/phase flag (``"0"``/``""`` → G, ``"2"`` → L, else → S)
+    * col  50   : condensed-phase ordinal (``"0"``/``""`` → gas; ``"1"``,
+      ``"2"``, … → condensed).  S vs L is resolved from *species_name* by
+      :func:`phase_from_cond_flag`.
 
     Args:
         line: The descriptor / card-2 line.
+        species_name: Full species name from the preceding card-1 line (e.g.
+            ``"K2CO3(b)"``).  Used to distinguish liquid from solid polymorphs.
 
     Returns:
         Tuple ``(n_intervals, elements, phase)``.
@@ -488,7 +518,7 @@ def parse_nasa9_descriptor(line: str) -> Tuple[int, Dict[str, float], str]:
     if not elements:
         elements = rescue_nasa9_elements(line)
 
-    phase = phase_from_cond_flag(fw(line, 51, 52))
+    phase = phase_from_cond_flag(fw(line, 51, 52), species_name)
     return n_intervals, elements, phase
 
 
