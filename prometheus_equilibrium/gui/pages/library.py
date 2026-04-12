@@ -56,7 +56,16 @@ class LibraryPage(QWidget):
 
         self.db_table = QTableWidget(0, 8)
         self.db_table.setHorizontalHeaderLabels(
-            ["Name", "ID", "CAS", "Aliases", "Roles", "Density (g/cc)", "dHf298 (J/mol)", "Source"]
+            [
+                "Name",
+                "ID",
+                "CAS",
+                "Aliases",
+                "Roles",
+                "Density (g/cc)",
+                "dHf298 (J/mol)",
+                "Source",
+            ]
         )
         self.db_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.db_table.horizontalHeader().setStretchLastSection(True)

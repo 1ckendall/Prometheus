@@ -131,7 +131,7 @@ class EquilibriumSolver(ABC):
         self,
         max_iterations: int = 50,
         tolerance: float = 5e-6,
-        capture_history: bool = True,
+        capture_history: bool = False,
         history_stride: int = 1,
     ) -> None:
         self.max_iterations = max_iterations
@@ -348,7 +348,7 @@ class _ReactionAdjustmentBase(EquilibriumSolver, ABC):
         max_iterations: int = 50,
         tolerance: float = 5e-6,
         minor_threshold: float = 1e-2,
-        capture_history: bool = True,
+        capture_history: bool = False,
         history_stride: int = 1,
     ) -> None:
         super().__init__(max_iterations, tolerance, capture_history, history_stride)
@@ -1609,9 +1609,7 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
 
         # Precompute values that are constant throughout the inner loop.
         # g°/RT: T is fixed, so one evaluation per species suffices.
-        g0_arr = np.array(
-            [sp.reduced_gibbs(T) for sp in mixture.species], dtype=float
-        )
+        g0_arr = np.array([sp.reduced_gibbs(T) for sp in mixture.species], dtype=float)
         g0_gas = g0_arr[:n_gas]
         # ln(P/P°): P is constant for the entire problem.
         _ln_P_ratio = math.log(P / _P_REF)
@@ -1628,7 +1626,11 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
 
             # Reduced chemical potentials for all gas species
             mu_gas = GordonMcBrideSolver._reduced_chemical_potentials(
-                mixture.species[:n_gas], n_gas_arr, n_gas_total, T, P,
+                mixture.species[:n_gas],
+                n_gas_arr,
+                n_gas_total,
+                T,
+                P,
                 g0_arr=g0_gas,
                 ln_P_ratio=_ln_P_ratio,
             )
@@ -1757,7 +1759,13 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
             # --- 5. Minor gas species: analytical update from π ---
             n_gas_updated = float(mixture.gas_moles().sum())
             self._update_minor_from_potentials(
-                minor_gas_indices, mixture, em, pi, n_gas_updated, T, P,
+                minor_gas_indices,
+                mixture,
+                em,
+                pi,
+                n_gas_updated,
+                T,
+                P,
                 g0_arr=g0_arr,
                 ln_P_ratio=_ln_P_ratio,
                 gas_only=True,
@@ -1828,9 +1836,7 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
         _n_gas_now = float(mixture.gas_moles().sum())
         _ln_n_ex = math.log(max(_n_gas_now, 1e-300))
         for _j in range(mixture.n_gas):
-            _ln_eq = (
-                float(_A_ex[_j, :] @ pi) - g0_arr[_j] - _ln_P_ratio + _ln_n_ex
-            )
+            _ln_eq = float(_A_ex[_j, :] @ pi) - g0_arr[_j] - _ln_P_ratio + _ln_n_ex
             _ln_eq = min(_ln_eq, 700.0)
             if _ln_eq - _ln_n_ex <= _LOG_CONC_TOL:
                 mixture.moles[_j] = 0.0
@@ -1852,9 +1858,7 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
         for _ in range(4):
             _b_curr = _A_ex.T @ mixture.moles  # includes condensed
             _b_err = b0 - _b_curr
-            _rel_err = float(
-                np.max(np.abs(_b_err) / np.maximum(np.abs(b0), 1e-30))
-            )
+            _rel_err = float(np.max(np.abs(_b_err) / np.maximum(np.abs(b0), 1e-30)))
             if _rel_err <= 1e-8:
                 break
             _n_gas_upd = mixture.moles[:n_gas]
@@ -2202,7 +2206,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
         self,
         max_iterations: int = 300,
         tolerance: float = 1e-4,
-        capture_history: bool = True,
+        capture_history: bool = False,
         history_stride: int = 1,
     ) -> None:
         super().__init__(

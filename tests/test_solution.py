@@ -207,7 +207,7 @@ def test_two_phase_cv_gamma_density_speed_of_sound():
             return self._cp_r * R
 
     sp_gas = _Gas({"X": 1}, g0=1.0, h0=3.0, molar_mass_kg=0.002)  # Cp = 3R
-    sp_cond = _Cond({"Y": 1}, cp_r=4.0, molar_mass_kg=0.100)       # Cp = 4R
+    sp_cond = _Cond({"Y": 1}, cp_r=4.0, molar_mass_kg=0.100)  # Cp = 4R
 
     # 2 mol gas + 1 mol condensed
     mix = Mixture([sp_gas, sp_cond], np.array([2.0, 1.0]))

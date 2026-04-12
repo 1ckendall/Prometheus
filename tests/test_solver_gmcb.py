@@ -224,7 +224,9 @@ def test_tp_converges(x_x2_problem):
 
 def test_history_default_full_capture_gmcb(x_x2_problem):
     """G-McB should capture per-iteration history when explicitly enabled."""
-    sol = GordonMcBrideSolver(max_iterations=80, capture_history=True).solve(x_x2_problem)
+    sol = GordonMcBrideSolver(max_iterations=80, capture_history=True).solve(
+        x_x2_problem
+    )
     assert sol.converged
     assert sol.history is not None
     assert len(sol.history) == sol.iterations

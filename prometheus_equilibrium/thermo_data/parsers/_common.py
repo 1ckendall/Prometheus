@@ -368,7 +368,9 @@ def phase_from_cond_flag(cond_flag: str, species_name: str = "") -> str:
         return "G"
     # Condensed: use the species name to distinguish liquid from solid.
     # Match a trailing parenthetical like (L), (l), (liq), (liquid).
-    if species_name and re.search(r"\(l(?:iq(?:uid)?)?\)\s*$", species_name, re.IGNORECASE):
+    if species_name and re.search(
+        r"\(l(?:iq(?:uid)?)?\)\s*$", species_name, re.IGNORECASE
+    ):
         return "L"
     return "S"
 

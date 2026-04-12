@@ -16,6 +16,7 @@ For each case the MajorSpeciesSolver is patched to print:
 Run with:
     PYTHONIOENCODING=utf-8 uv run python docs/scripts/element_potential_trace.py
 """
+
 from __future__ import annotations
 
 import math
@@ -33,11 +34,11 @@ from prometheus_equilibrium.core.constants import UNIVERSAL_GAS_CONSTANT as _R
 from prometheus_equilibrium.equilibrium.element_matrix import ElementMatrix
 from prometheus_equilibrium.equilibrium.mixture import Mixture
 from prometheus_equilibrium.equilibrium.problem import EquilibriumProblem, ProblemType
+from prometheus_equilibrium.equilibrium.solution import ConvergenceStep
 from prometheus_equilibrium.equilibrium.solver import (
     GordonMcBrideSolver,
     MajorSpeciesSolver,
 )
-from prometheus_equilibrium.equilibrium.solution import ConvergenceStep
 from prometheus_equilibrium.equilibrium.species import SpeciesDatabase
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -55,13 +56,14 @@ T_REF = 298.15
 
 # ── Instrumented subclass ─────────────────────────────────────────────────────
 
+
 class TracingMajorSpeciesSolver(MajorSpeciesSolver):
     """Subclass that prints full internal state at each inner iteration."""
 
     def __init__(self, label: str, max_T_outer: int = 1):
         super().__init__(capture_history=True)
         self.label = label
-        self.max_T_outer = max_T_outer   # stop after this many outer T steps
+        self.max_T_outer = max_T_outer  # stop after this many outer T steps
         self._outer_count = 0
 
     def _tp_equilibrium(
@@ -140,8 +142,12 @@ class TracingMajorSpeciesSolver(MajorSpeciesSolver):
             # ── Print iteration header ──────────────────────────────────────
             print(f"\n  --- Inner iteration {n_inner} ---")
             print(f"  n_gas_total = {n_gas_total:.6f}  n_total = {n_total:.6f}")
-            print(f"  Basis species: {[mixture.species[i].formula for i in basis_indices]}")
-            print(f"  Major non-basis gas: {[mixture.species[i].formula for i in major_gas_indices if i not in set(basis_indices)]}")
+            print(
+                f"  Basis species: {[mixture.species[i].formula for i in basis_indices]}"
+            )
+            print(
+                f"  Major non-basis gas: {[mixture.species[i].formula for i in major_gas_indices if i not in set(basis_indices)]}"
+            )
             print(f"  Minor gas count: {len(minor_gas_indices)}")
             print()
 
@@ -152,7 +158,9 @@ class TracingMajorSpeciesSolver(MajorSpeciesSolver):
             for i in top_idx:
                 sp = mixture.species[i]
                 xj = mixture.moles[i] / max(n_gas_total, 1e-300)
-                print(f"  {sp.formula:20s}  {mixture.moles[i]:12.6f}  {xj:10.6f}  {mu_gas[i]:12.6f}")
+                print(
+                    f"  {sp.formula:20s}  {mixture.moles[i]:12.6f}  {xj:10.6f}  {mu_gas[i]:12.6f}"
+                )
 
             # ── Assemble Jacobian ───────────────────────────────────────────
             active_cnd_local = self._active_condensed_indices(mixture)
@@ -179,11 +187,21 @@ class TracingMajorSpeciesSolver(MajorSpeciesSolver):
             print(f"  Size: {size} x {size+1}  (S={S}, nc={nc})")
             el_labels = list(em.elements) + ["n"]
             rhs_labels = list(em.elements) + ["n_tot"]
-            header = "  " + f"{'':12s}" + "".join(f"  {L:>12s}" for L in el_labels) + f"  {'RHS':>12s}"
+            header = (
+                "  "
+                + f"{'':12s}"
+                + "".join(f"  {L:>12s}" for L in el_labels)
+                + f"  {'RHS':>12s}"
+            )
             print(header)
-            print("  " + "-" * (14 + 14*size + 14))
+            print("  " + "-" * (14 + 14 * size + 14))
             for row_i, row_label in enumerate(rhs_labels):
-                row_str = "  " + f"{row_label:12s}" + "".join(f"  {G[row_i,col]:12.5g}" for col in range(size)) + f"  {G[row_i,-1]:12.5g}"
+                row_str = (
+                    "  "
+                    + f"{row_label:12s}"
+                    + "".join(f"  {G[row_i,col]:12.5g}" for col in range(size))
+                    + f"  {G[row_i,-1]:12.5g}"
+                )
                 print(row_str)
 
             # ── Solve ───────────────────────────────────────────────────────
@@ -224,7 +242,9 @@ class TracingMajorSpeciesSolver(MajorSpeciesSolver):
                     )
                     shown += 1
                     if shown >= 5:
-                        print(f"    ... ({len(minor_gas_indices)-5} more minor species)")
+                        print(
+                            f"    ... ({len(minor_gas_indices)-5} more minor species)"
+                        )
                         break
 
             # ── Apply update (delegate to parent helpers) ───────────────────
@@ -254,26 +274,35 @@ class TracingMajorSpeciesSolver(MajorSpeciesSolver):
 
             _step_norm = max(
                 max(
-                    (abs(mixture.moles[idx] * d_i) / max(float(mixture.gas_moles().sum()), 1e-300)
-                     for idx, d_i in zip(major_gas_indices, delta_ln_nj_maj)
-                     if mixture.moles[idx] > 0.0),
+                    (
+                        abs(mixture.moles[idx] * d_i)
+                        / max(float(mixture.gas_moles().sum()), 1e-300)
+                        for idx, d_i in zip(major_gas_indices, delta_ln_nj_maj)
+                        if mixture.moles[idx] > 0.0
+                    ),
                     default=0.0,
                 ),
                 abs(float(delta_ln_n)),
             )
             self._last_step_norm = float(_step_norm)
 
-            print(f"\n  After update: el_res_max = {_el_max:.3e}  step_norm = {_step_norm:.3e}  lam = {lam:.4f}")
+            print(
+                f"\n  After update: el_res_max = {_el_max:.3e}  step_norm = {_step_norm:.3e}  lam = {lam:.4f}"
+            )
 
             if self._check_convergence(
                 mixture, delta_ln_nj_maj, major_gas_indices, delta_ln_n, element_res2
             ):
-                print(f"\n  CONVERGED at iteration {n_inner}  (step_norm={_step_norm:.3e} < tol={self.tolerance})")
+                print(
+                    f"\n  CONVERGED at iteration {n_inner}  (step_norm={_step_norm:.3e} < tol={self.tolerance})"
+                )
                 _tp_converged = True
                 break
 
             if n_inner >= 4:
-                print(f"\n  [Trace limit reached — delegating remaining iterations to base class]")
+                print(
+                    f"\n  [Trace limit reached — delegating remaining iterations to base class]"
+                )
                 # Continue with parent (non-printing) for the rest
                 result = super()._tp_equilibrium(mixture, em, b0, T, P)
                 return result
@@ -286,7 +315,9 @@ class TracingMajorSpeciesSolver(MajorSpeciesSolver):
         _LOG_CONC_TOL = math.log(1e-8)
         for _j in range(mixture.n_gas):
             _sp = mixture.species[_j]
-            _ln_eq = float(_A_ex[_j, :] @ pi) - _sp.reduced_gibbs(T) - _ln_P_ex + _ln_n_ex
+            _ln_eq = (
+                float(_A_ex[_j, :] @ pi) - _sp.reduced_gibbs(T) - _ln_P_ex + _ln_n_ex
+            )
             _ln_eq = min(_ln_eq, 700.0)
             if _ln_eq - _ln_n_ex <= _LOG_CONC_TOL:
                 mixture.moles[_j] = 0.0
@@ -297,6 +328,7 @@ class TracingMajorSpeciesSolver(MajorSpeciesSolver):
 
 
 # ── Build and run a case ───────────────────────────────────────────────────────
+
 
 def run_case(
     label: str,
@@ -330,18 +362,27 @@ def run_case(
 
     solver = TracingMajorSpeciesSolver(label=label, max_T_outer=1)
     import warnings
+
     with warnings.catch_warnings(record=True):
         warnings.simplefilter("always")
         sol = solver.solve(problem)
 
     print(f"\n{banner}")
     print(f"  FINAL RESULT — {label}")
-    print(f"  T = {sol.temperature:.4f} K   converged = {sol.converged}   iters = {sol.iterations}")
+    print(
+        f"  T = {sol.temperature:.4f} K   converged = {sol.converged}   iters = {sol.iterations}"
+    )
     print(f"  pi (element potentials at convergence):")
-    for k, pi_k in zip(sol.mixture.species[0].elements.keys() if False else
-                       # recover elements from the lagrange multipliers shape
-                       [f"el_{i}" for i in range(len(sol.lagrange_multipliers))],
-                       sol.lagrange_multipliers):
+    for k, pi_k in zip(
+        (
+            sol.mixture.species[0].elements.keys()
+            if False
+            else
+            # recover elements from the lagrange multipliers shape
+            [f"el_{i}" for i in range(len(sol.lagrange_multipliers))]
+        ),
+        sol.lagrange_multipliers,
+    ):
         print(f"    pi[{k}] = {pi_k:.6f}")
     print(f"  Major species (x >= 0.1%):")
     for sp, x in sol.major_species(threshold=1e-3).items():

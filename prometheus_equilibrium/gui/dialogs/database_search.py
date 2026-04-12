@@ -30,12 +30,12 @@ def _query_to_hill(query: str) -> str | None:
     """
     # Must start with an uppercase letter (element symbol) and contain only
     # element symbols (upper + optional lower) and digits.
-    if not re.match(r'^[A-Z]', query):
+    if not re.match(r"^[A-Z]", query):
         return None
-    if re.search(r'[^A-Za-z0-9]', query):
+    if re.search(r"[^A-Za-z0-9]", query):
         return None
 
-    tokens = re.findall(r'([A-Z][a-z]?)(\d*)', query)
+    tokens = re.findall(r"([A-Z][a-z]?)(\d*)", query)
     if not tokens:
         return None
 
@@ -94,7 +94,7 @@ class DatabaseSearchDialog(QDialog):
         for item in items:
             if isinstance(item, str):
                 lw = QListWidgetItem(item)
-                lw.setData(Qt.UserRole, item)           # id
+                lw.setData(Qt.UserRole, item)  # id
                 lw.setData(Qt.UserRole + 1, item.lower())  # search_text
             else:
                 lw = QListWidgetItem(item["display"])

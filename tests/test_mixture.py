@@ -205,7 +205,6 @@ def test_gas_entropy_returns_zero_for_no_gas():
     assert mix.gas_entropy(1000.0, P_REF) == pytest.approx(0.0)
 
 
-
 def test_total_gas_entropy_matches_molar_times_gas_moles(mixture_env):
     """total_gas_entropy should be n_gas * gas_entropy for mixed-phase systems."""
     mix, T = mixture_env["mix"], mixture_env["T"]

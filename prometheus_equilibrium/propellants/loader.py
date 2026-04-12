@@ -110,11 +110,25 @@ class SyntheticSpecies(Species):
         cp: float,
         phase: Optional[str] = None,
         alias: Optional[str] = None,
+        molar_mass_g_mol: Optional[float] = None,
     ) -> None:
         super().__init__(elements, state, phase)
         self.dHf298 = float(dHf298)
         self.cp = float(cp)
         self.alias = alias
+        self._molar_mass_kg = (
+            float(molar_mass_g_mol) / 1000.0 if molar_mass_g_mol is not None else None
+        )
+
+    def molar_mass(self) -> float:
+        """Return the molar mass in kg/mol.
+
+        Uses the explicitly supplied value when provided; otherwise computes
+        from the element dictionary (inherited behaviour).
+        """
+        if self._molar_mass_kg is not None:
+            return self._molar_mass_kg
+        return super().molar_mass()
 
     def specific_heat_capacity(
         self, T: Union[float, np.ndarray]
@@ -447,7 +461,9 @@ class PropellantDatabase:
             aliases = rec.get("aliases", [])
             # Prefer inline elements dict; fall back to the resolved species object
             # (always present after load()) so thermo_id-based entries also get a formula.
-            elements = rec.get("elements") or getattr(rec.get("_species"), "elements", {})
+            elements = rec.get("elements") or getattr(
+                rec.get("_species"), "elements", {}
+            )
             formula = _elements_to_hill(elements) if elements else ""
             source = rec.get("source", "")
             display = name

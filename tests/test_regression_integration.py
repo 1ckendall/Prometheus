@@ -69,9 +69,9 @@ pytestmark = pytest.mark.integration
 # Tolerances
 # ---------------------------------------------------------------------------
 
-_GMCB_CEA_TOL = 5e-4   # 0.05 % — GMcB vs RocketCEA
+_GMCB_CEA_TOL = 5e-4  # 0.05 % — GMcB vs RocketCEA
 _MAJOR_GMCB_TOL = 1e-2  # 1.0 % — Major vs GMcB (nozzle-expansion variability)
-_ELEM_TOL = 1e-6        # element abundance conservation
+_ELEM_TOL = 1e-6  # element abundance conservation
 _APCP_CROSS_TOL = 5e-3  # 0.5 % — APCP cross-solver agreement
 
 # ---------------------------------------------------------------------------
@@ -79,9 +79,7 @@ _APCP_CROSS_TOL = 5e-3  # 0.5 % — APCP cross-solver agreement
 # ---------------------------------------------------------------------------
 
 _THERMO_DIR = (
-    Path(__file__).resolve().parent.parent
-    / "prometheus_equilibrium"
-    / "thermo_data"
+    Path(__file__).resolve().parent.parent / "prometheus_equilibrium" / "thermo_data"
 )
 _PROPELLANTS_TOML = (
     Path(__file__).resolve().parent.parent
@@ -125,8 +123,7 @@ def _register_cea_species(formula: str, kind: str, pairs, h_j_per_mol: float) ->
     h_cal = h_j_per_mol / _CAL_TO_J
     elems = "  ".join(f"{sym} {n}" for sym, n in pairs)
     card = (
-        f"{kind} prom_{formula}  {elems}  wt%=100."
-        f"  t(k)=298.150  h,cal={h_cal:.6f}"
+        f"{kind} prom_{formula}  {elems}  wt%=100." f"  t(k)=298.150  h,cal={h_cal:.6f}"
     )
     (add_new_fuel if kind == "fuel" else add_new_oxidizer)(f"prom_{formula}", card)
 
@@ -413,10 +410,10 @@ def test_ch4o2_major_vs_gmcb(of, species_db):
 _APCP_PC_PA = 1000.0 * 6894.757
 _APCP_EPS = 10.0
 
-_APCP_TC_BOUNDS = (2900.0, 3700.0)     # K
+_APCP_TC_BOUNDS = (2900.0, 3700.0)  # K
 _APCP_CSTAR_BOUNDS = (1400.0, 1900.0)  # m/s
-_APCP_ISP_SH_BOUNDS = (250.0, 320.0)   # s (shifting, vacuum)
-_APCP_ISP_FR_BOUNDS = (230.0, 310.0)   # s (frozen, vacuum)
+_APCP_ISP_SH_BOUNDS = (250.0, 320.0)  # s (shifting, vacuum)
+_APCP_ISP_FR_BOUNDS = (230.0, 310.0)  # s (frozen, vacuum)
 
 
 @pytest.fixture(scope="session")
@@ -457,9 +454,9 @@ def test_apcp_conservation(solver_name, apcp_results):
     sol = r["shift"].chamber
     assert sol.converged, f"{solver_name} shifting chamber did not converge"
     err = _elem_balance_error(sol, r["reactants"])
-    assert err < _ELEM_TOL, (
-        f"{solver_name} element balance error {err:.2e} exceeds {_ELEM_TOL}"
-    )
+    assert (
+        err < _ELEM_TOL
+    ), f"{solver_name} element balance error {err:.2e} exceeds {_ELEM_TOL}"
 
 
 @pytest.mark.parametrize("solver_name", ["GMcB", "Major"])
@@ -469,18 +466,18 @@ def test_apcp_physical_bounds(solver_name, apcp_results):
     fr = apcp_results[solver_name]["frozen"]
 
     tc = sh.chamber.temperature
-    assert _APCP_TC_BOUNDS[0] <= tc <= _APCP_TC_BOUNDS[1], (
-        f"{solver_name} Tc {tc:.1f} K outside {_APCP_TC_BOUNDS} K"
-    )
-    assert _APCP_CSTAR_BOUNDS[0] <= sh.cstar <= _APCP_CSTAR_BOUNDS[1], (
-        f"{solver_name} cstar {sh.cstar:.1f} m/s outside {_APCP_CSTAR_BOUNDS}"
-    )
-    assert _APCP_ISP_SH_BOUNDS[0] <= sh.isp_vac <= _APCP_ISP_SH_BOUNDS[1], (
-        f"{solver_name} Isp_shift {sh.isp_vac:.2f} s outside {_APCP_ISP_SH_BOUNDS}"
-    )
-    assert _APCP_ISP_FR_BOUNDS[0] <= fr.isp_vac <= _APCP_ISP_FR_BOUNDS[1], (
-        f"{solver_name} Isp_frozen {fr.isp_vac:.2f} s outside {_APCP_ISP_FR_BOUNDS}"
-    )
+    assert (
+        _APCP_TC_BOUNDS[0] <= tc <= _APCP_TC_BOUNDS[1]
+    ), f"{solver_name} Tc {tc:.1f} K outside {_APCP_TC_BOUNDS} K"
+    assert (
+        _APCP_CSTAR_BOUNDS[0] <= sh.cstar <= _APCP_CSTAR_BOUNDS[1]
+    ), f"{solver_name} cstar {sh.cstar:.1f} m/s outside {_APCP_CSTAR_BOUNDS}"
+    assert (
+        _APCP_ISP_SH_BOUNDS[0] <= sh.isp_vac <= _APCP_ISP_SH_BOUNDS[1]
+    ), f"{solver_name} Isp_shift {sh.isp_vac:.2f} s outside {_APCP_ISP_SH_BOUNDS}"
+    assert (
+        _APCP_ISP_FR_BOUNDS[0] <= fr.isp_vac <= _APCP_ISP_FR_BOUNDS[1]
+    ), f"{solver_name} Isp_frozen {fr.isp_vac:.2f} s outside {_APCP_ISP_FR_BOUNDS}"
 
 
 def test_apcp_cross_solver_agreement(apcp_results):

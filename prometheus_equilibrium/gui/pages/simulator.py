@@ -508,7 +508,9 @@ class SimulatorPage(QWidget):
             container = table.cellWidget(r, 0)
             combo = container.findChild(QComboBox) if container else None
             w_widget = table.cellWidget(r, 1)
-            ing_id = (combo.currentData() or combo.currentText()).strip() if combo else ""
+            ing_id = (
+                (combo.currentData() or combo.currentText()).strip() if combo else ""
+            )
             weight_text = w_widget.text().strip() if w_widget else "0"
             try:
                 weight = float(weight_text)

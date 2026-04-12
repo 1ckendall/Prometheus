@@ -127,7 +127,9 @@ def test_solve_skips_profile_when_disabled(monkeypatch):
         t_init=3500.0,
     )
 
-    result = solver.solve(problem, pe_pa=101325.0, shifting=False, compute_profile=False)
+    result = solver.solve(
+        problem, pe_pa=101325.0, shifting=False, compute_profile=False
+    )
     assert result.profile == []
 
 
@@ -671,9 +673,9 @@ def test_shifting_condensed_species_available_without_terra():
     perf_solver = PerformanceSolver(solver, db=db)
     result = perf_solver.solve(problem, pe_pa=101325.0, shifting=True)
 
-    assert result.exit.converged, (
-        f"Shifting exit did not converge: {result.exit.failure_reason}"
-    )
+    assert (
+        result.exit.converged
+    ), f"Shifting exit did not converge: {result.exit.failure_reason}"
 
     # The exit gas mean molar mass should reflect condensed Al2O3 presence.
     # Without the fix, M̄ jumps to ~27.7 (gas-only); with condensed Al2O3

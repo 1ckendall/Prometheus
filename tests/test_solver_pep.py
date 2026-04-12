@@ -132,7 +132,9 @@ def test_tp_converges(x_x2_problem):
 def test_history_default_full_capture_pep_major_species(x_x2_problem):
     """PEP and major-species solver should capture history when explicitly enabled."""
     sol_pep = PEPSolver(max_iterations=200, capture_history=True).solve(x_x2_problem)
-    sol_hyb = MajorSpeciesSolver(max_iterations=120, capture_history=True).solve(x_x2_problem)
+    sol_hyb = MajorSpeciesSolver(max_iterations=120, capture_history=True).solve(
+        x_x2_problem
+    )
     assert sol_pep.converged
     assert sol_hyb.converged
     assert sol_pep.history is not None and len(sol_pep.history) > 0

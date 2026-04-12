@@ -482,19 +482,20 @@ class EngineDock(QDockWidget):
 
         def _species_table(header, chamber_sol, throat_sol, exit_sol):
             def moles_dict(sol):
-                return {str(sp): n for sp, n in zip(sol.mixture.species, sol.mixture.moles)}
+                return {
+                    str(sp): n for sp, n in zip(sol.mixture.species, sol.mixture.moles)
+                }
 
             ch_d = moles_dict(chamber_sol)
             th_d = moles_dict(throat_sol)
             ex_d = moles_dict(exit_sol)
 
             all_species = {
-                sp
-                for d in (ch_d, th_d, ex_d)
-                for sp, n in d.items()
-                if n > 1e-6
+                sp for d in (ch_d, th_d, ex_d) for sp, n in d.items() if n > 1e-6
             }
-            sorted_species = sorted(all_species, key=lambda s: ch_d.get(s, 0.0), reverse=True)
+            sorted_species = sorted(
+                all_species, key=lambda s: ch_d.get(s, 0.0), reverse=True
+            )
 
             rows = [
                 "",
@@ -510,7 +511,11 @@ class EngineDock(QDockWidget):
             return rows
 
         lines.extend(_species_column("Frozen Species Moles", chamber))
-        lines.extend(_species_table("Shifting Species Moles", chamber, shifting.throat, shifting.exit))
+        lines.extend(
+            _species_table(
+                "Shifting Species Moles", chamber, shifting.throat, shifting.exit
+            )
+        )
 
         lines.extend(
             [

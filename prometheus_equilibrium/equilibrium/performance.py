@@ -710,11 +710,11 @@ class PerformanceSolver:
             sp_products = list(full_products)
 
         reactant_dict = {
-            sp: n
-            for sp, n in zip(chamber_mix.species, chamber_mix.moles)
-            if n > 0
+            sp: n for sp, n in zip(chamber_mix.species, chamber_mix.moles) if n > 0
         }
-        entropy_target = chamber_mix.total_entropy(chamber.temperature, chamber.pressure)
+        entropy_target = chamber_mix.total_entropy(
+            chamber.temperature, chamber.pressure
+        )
         sp_prob = EP(
             reactants=reactant_dict,
             products=sp_products,
@@ -761,7 +761,11 @@ class PerformanceSolver:
         The continuation path improves branch stability near condensed phase
         transitions for whole-flow entropy constraints.
         """
-        n_steps = int(np.clip(math.ceil(math.log(chamber.pressure / p_target) / math.log(1.35)), 6, 30))
+        n_steps = int(
+            np.clip(
+                math.ceil(math.log(chamber.pressure / p_target) / math.log(1.35)), 6, 30
+            )
+        )
         pressures = np.geomspace(chamber.pressure, p_target, n_steps + 1)[1:]
 
         last = chamber
@@ -784,7 +788,9 @@ class PerformanceSolver:
                     log_failure=False if idx < (len(pressures) - 1) else log_failure,
                 )
                 if retry is not None and retry.converged:
-                    if self._branch_distance(reference=last, candidate=retry) < self._branch_distance(reference=last, candidate=sol):
+                    if self._branch_distance(
+                        reference=last, candidate=retry
+                    ) < self._branch_distance(reference=last, candidate=sol):
                         logger.warning(
                             "SP continuation branch guard selected alternate state at P={:.3e} Pa.",
                             p_step,
@@ -795,20 +801,30 @@ class PerformanceSolver:
         return last
 
     @staticmethod
-    def _is_branch_jump(previous: EquilibriumSolution, current: EquilibriumSolution) -> bool:
+    def _is_branch_jump(
+        previous: EquilibriumSolution, current: EquilibriumSolution
+    ) -> bool:
         """Return whether the current SP point shows a likely non-physical branch jump."""
         if current.gas_mean_molar_mass <= previous.gas_mean_molar_mass:
             return False
-        mass_ratio = current.gas_mean_molar_mass / max(previous.gas_mean_molar_mass, 1e-12)
+        mass_ratio = current.gas_mean_molar_mass / max(
+            previous.gas_mean_molar_mass, 1e-12
+        )
         temperature_drop = previous.temperature - current.temperature
         return mass_ratio > 1.25 and temperature_drop > 120.0
 
     @staticmethod
-    def _branch_distance(reference: EquilibriumSolution, candidate: EquilibriumSolution) -> float:
+    def _branch_distance(
+        reference: EquilibriumSolution, candidate: EquilibriumSolution
+    ) -> float:
         """Compute a smoothness score against the previous continuation point."""
-        mass_ratio = candidate.gas_mean_molar_mass / max(reference.gas_mean_molar_mass, 1e-12)
+        mass_ratio = candidate.gas_mean_molar_mass / max(
+            reference.gas_mean_molar_mass, 1e-12
+        )
         d_mass = abs(math.log(max(mass_ratio, 1e-12)))
-        d_temp = abs(candidate.temperature - reference.temperature) / max(reference.temperature, 1.0)
+        d_temp = abs(candidate.temperature - reference.temperature) / max(
+            reference.temperature, 1.0
+        )
         return d_mass + d_temp
 
     def _retry_smooth_branch(
@@ -979,7 +995,7 @@ class PerformanceSolver:
         if n_gas == 0:
             return None
 
-        n_gas_arr = mix.gas_moles()           # shape (n_gas,)
+        n_gas_arr = mix.gas_moles()  # shape (n_gas,)
         n_gas_total = float(n_gas_arr.sum())
         if n_gas_total <= 0.0:
             return None
@@ -987,13 +1003,11 @@ class PerformanceSolver:
         # Build the stoichiometric matrix using only the full mixture
         # (Mixture keeps gas before condensed, so gas_rows() is safe).
         em = ElementMatrix.from_mixture(mix)
-        A_gas = em.gas_rows()                 # (n_gas, ne)
+        A_gas = em.gas_rows()  # (n_gas, ne)
         ne = A_gas.shape[1]
 
         # Dimensionless enthalpies h_j = H_j(T)/(R·T)
-        h_gas = np.array([
-            sp.reduced_enthalpy(T) for sp in mix.species[:n_gas]
-        ])
+        h_gas = np.array([sp.reduced_enthalpy(T) for sp in mix.species[:n_gas]])
         if not np.all(np.isfinite(h_gas)):
             return None
 
@@ -1003,7 +1017,7 @@ class PerformanceSolver:
         # J[ne, ne] = 0  (diagonal for Δln(n) row is zero in CEA's formulation)
         J = np.zeros((ne + 1, ne + 1))
         J[:ne, :ne] = A_gas.T @ (n_gas_arr[:, None] * A_gas)
-        col = A_gas.T @ n_gas_arr             # shape (ne,)
+        col = A_gas.T @ n_gas_arr  # shape (ne,)
         J[:ne, ne] = col
         J[ne, :ne] = col
         # J[ne, ne] = 0.0 already (from np.zeros)
@@ -1034,7 +1048,7 @@ class PerformanceSolver:
         # Extract sensitivities (last row = dn/dlnT and dn/dlnP)
         dn_dlnT = float(X[ne, 0])
         dn_dlnP = float(X[ne, 1])
-        dpi_dlnT = X[:ne, 0]                  # shape (ne,)
+        dpi_dlnT = X[:ne, 0]  # shape (ne,)
 
         dlnV_dlnT = 1.0 + dn_dlnT
         dlnV_dlnP = -1.0 + dn_dlnP
@@ -1045,7 +1059,7 @@ class PerformanceSolver:
         # Term 3:           (Σⱼ nⱼ·hⱼ) · dn_dlnT
         # Term 5:           Σⱼ nⱼ·hⱼ²
         cp_fr_over_R = mix.total_gas_cp(T) / _R
-        nA_dot_h = A_gas.T @ (n_gas_arr * h_gas)   # (ne,): Σⱼ nⱼ·Aᵢⱼ·hⱼ per element
+        nA_dot_h = A_gas.T @ (n_gas_arr * h_gas)  # (ne,): Σⱼ nⱼ·Aᵢⱼ·hⱼ per element
         cp_eq_over_R = (
             cp_fr_over_R
             + float(nA_dot_h @ dpi_dlnT)
@@ -1057,7 +1071,7 @@ class PerformanceSolver:
             return None
 
         # ---- γₛ = −1 / (∂lnV/∂lnP + (∂lnV/∂lnT)² · n / Cp_eq) ----
-        denom = dlnV_dlnP + (dlnV_dlnT ** 2) * n_gas_total / cp_eq_over_R
+        denom = dlnV_dlnP + (dlnV_dlnT**2) * n_gas_total / cp_eq_over_R
         if not math.isfinite(denom) or abs(denom) < 1e-12:
             return None
 

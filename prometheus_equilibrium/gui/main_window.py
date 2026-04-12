@@ -111,7 +111,9 @@ class ProPepUI(QMainWindow):
         solver_group.triggered.connect(self.on_solver_changed)
 
         # Convergence history toggle
-        self.action_capture_history = menu_options.addAction("Record Convergence History")
+        self.action_capture_history = menu_options.addAction(
+            "Record Convergence History"
+        )
         self.action_capture_history.setCheckable(True)
         self.action_capture_history.setChecked(True)
         self.action_capture_history.triggered.connect(self._on_capture_history_toggled)

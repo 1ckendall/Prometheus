@@ -46,11 +46,13 @@ def run_performance(include_terra: bool):
     )
     prop_db.load()
 
-    mixture = prop_db.mix([
-        ("AMMONIUM_PERCHLORATE", 0.68),
-        ("ALUMINUM_PURE_CRYSTALINE", 0.18),
-        ("HTPB_R_45HT", 0.14),
-    ])
+    mixture = prop_db.mix(
+        [
+            ("AMMONIUM_PERCHLORATE", 0.68),
+            ("ALUMINUM_PURE_CRYSTALINE", 0.18),
+            ("HTPB_R_45HT", 0.14),
+        ]
+    )
 
     products = db.get_species(mixture.elements, max_atoms=20)
     problem = EquilibriumProblem(
@@ -67,7 +69,8 @@ def run_performance(include_terra: bool):
 
     # Count Al2O3 condensed species in products
     al2o3_count = sum(
-        1 for sp in products
+        1
+        for sp in products
         if sp.condensed == 1
         and sp.elements.get("Al", 0) == 2
         and sp.elements.get("O", 0) == 3
@@ -85,13 +88,16 @@ def run_performance(include_terra: bool):
             print(f"    Exit Mbar   = {mbar:.3f} g/mol (gas)")
             print(f"    Isp_actual  = {result.isp_actual:.2f} s  (at 1 atm)")
             print(f"    Isp_vac     = {result.isp_vac:.2f} s")
-            print(f"    C*          = {result.cstar:.2f} m/s  ({result.cstar/0.3048:.1f} ft/s)")
+            print(
+                f"    C*          = {result.cstar:.2f} m/s  ({result.cstar/0.3048:.1f} ft/s)"
+            )
             print(f"    Ae/At       = {result.area_ratio:.3f}")
             print(f"    Converged   = {result.exit.converged}")
 
             # Check for condensed species in exit
             n_cond = sum(
-                1 for sp, n in zip(result.exit.mixture.species, result.exit.mixture.moles)
+                1
+                for sp, n in zip(result.exit.mixture.species, result.exit.mixture.moles)
                 if sp.condensed == 1 and n > 1e-10
             )
             print(f"    Active condensed species at exit: {n_cond}")
@@ -121,10 +127,14 @@ if __name__ == "__main__":
             mbar1 = r1.exit.gas_mean_molar_mass * 1000
             mbar2 = r2.exit.gas_mean_molar_mass * 1000
             print(f"\n  {mode.upper()}:")
-            print(f"    Isp_vac: {r1.isp_vac:.2f} vs {r2.isp_vac:.2f} m/s "
-                  f"(diff={isp_diff:.2f}, {isp_pct:.2f}%)")
+            print(
+                f"    Isp_vac: {r1.isp_vac:.2f} vs {r2.isp_vac:.2f} m/s "
+                f"(diff={isp_diff:.2f}, {isp_pct:.2f}%)"
+            )
             print(f"    Exit Mbar: {mbar1:.3f} vs {mbar2:.3f} g/mol")
-            print(f"    Exit T:  {r1.exit.temperature:.2f} vs {r2.exit.temperature:.2f} K")
+            print(
+                f"    Exit T:  {r1.exit.temperature:.2f} vs {r2.exit.temperature:.2f} K"
+            )
             if isp_pct < 2.0:
                 print(f"    STATUS: OK (< 2% difference)")
             else:

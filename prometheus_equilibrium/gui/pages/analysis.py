@@ -108,8 +108,12 @@ class AnalysisPage(QWidget):
         """Clear a canvas and re-apply dark-theme axis styling."""
         canvas.axes.clear()
         canvas.axes.set_title(title or canvas.title_text, color="white")
-        canvas.axes.set_xlabel(xlabel if xlabel is not None else canvas.xlabel_text, color="white")
-        canvas.axes.set_ylabel(ylabel if ylabel is not None else canvas.ylabel_text, color="white")
+        canvas.axes.set_xlabel(
+            xlabel if xlabel is not None else canvas.xlabel_text, color="white"
+        )
+        canvas.axes.set_ylabel(
+            ylabel if ylabel is not None else canvas.ylabel_text, color="white"
+        )
         canvas.axes.tick_params(colors="white")
         canvas.axes.grid(True, linestyle="--", alpha=0.3)
 
@@ -146,9 +150,7 @@ class AnalysisPage(QWidget):
         # 1. Temperature plot
         temps = [step.temperature for step in solution.history]
         self._setup_axes(self.canvas_temperature_conv)
-        self.canvas_temperature_conv.axes.plot(
-            iterations, temps, "o-", color="#2a82da"
-        )
+        self.canvas_temperature_conv.axes.plot(iterations, temps, "o-", color="#2a82da")
         self.canvas_temperature_conv.draw()
 
         # 2. Concentration plot (top 10 species)
@@ -229,7 +231,9 @@ class AnalysisPage(QWidget):
 
             style_s = "o-" if s_profile else "o--"
             ms = 4 if s_profile else 7
-            ax.semilogx(sP, y_s, style_s, markersize=ms, color="#2a82da", label="Shifting")
+            ax.semilogx(
+                sP, y_s, style_s, markersize=ms, color="#2a82da", label="Shifting"
+            )
 
             if not s_profile:
                 for xi, yi, lbl in zip(sP, y_s, _STATION_LABELS):
@@ -246,7 +250,12 @@ class AnalysisPage(QWidget):
             if y_f_or_none is not None and fP is not None:
                 style_f = "s--" if s_profile else "s:"
                 ax.semilogx(
-                    fP, y_f_or_none, style_f, markersize=ms, color="#f39c12", label="Frozen"
+                    fP,
+                    y_f_or_none,
+                    style_f,
+                    markersize=ms,
+                    color="#f39c12",
+                    label="Frozen",
                 )
                 if not s_profile:
                     for xi, yi, lbl in zip(fP, y_f_or_none, _STATION_LABELS):
@@ -333,7 +342,9 @@ class AnalysisPage(QWidget):
         isp_f = [frozen.isp_actual, frozen.isp_vac, frozen.isp_sl]
         xc = np.arange(len(categories))
 
-        self._setup_axes(self.canvas_isp, title="Specific Impulse", xlabel="", ylabel="Isp (s)")
+        self._setup_axes(
+            self.canvas_isp, title="Specific Impulse", xlabel="", ylabel="Isp (s)"
+        )
         ax = self.canvas_isp.axes
         bars_s = ax.bar(xc - width / 2, isp_s, width, label="Shifting", color="#2a82da")
         bars_f = ax.bar(xc + width / 2, isp_f, width, label="Frozen", color="#f39c12")
@@ -346,7 +357,10 @@ class AnalysisPage(QWidget):
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + 0.5,
                 f"{bar.get_height():.1f}",
-                ha="center", va="bottom", color="white", fontsize=7,
+                ha="center",
+                va="bottom",
+                color="white",
+                fontsize=7,
             )
         self.canvas_isp.draw()
 
@@ -371,7 +385,10 @@ class AnalysisPage(QWidget):
                 bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + 1,
                 f"{bar.get_height():.1f}",
-                ha="center", va="bottom", color="white", fontsize=9,
+                ha="center",
+                va="bottom",
+                color="white",
+                fontsize=9,
             )
         self.canvas_cstar.draw()
 

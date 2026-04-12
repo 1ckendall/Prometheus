@@ -33,7 +33,9 @@ PSI_TO_PA = 6894.757
 G0 = 9.80665
 
 
-def _make_problem(include_terra: bool, chamber_pressure_pa: float) -> tuple[SpeciesDatabase, EquilibriumProblem]:
+def _make_problem(
+    include_terra: bool, chamber_pressure_pa: float
+) -> tuple[SpeciesDatabase, EquilibriumProblem]:
     db = SpeciesDatabase()
     db.load(include_janaf=False, include_terra=include_terra)
 
@@ -73,7 +75,9 @@ def _collect_metrics(result, ambient_pressure: float) -> Dict[str, float]:
     dh = result.chamber.total_enthalpy - result.exit.total_enthalpy
     v_exit = math.sqrt(max(0.0, 2.0 * dh))
     if result.exit.density * max(v_exit, 1e-30) > 0.0:
-        v_pressure = (result.exit.pressure - ambient_pressure) / (result.exit.density * v_exit)
+        v_pressure = (result.exit.pressure - ambient_pressure) / (
+            result.exit.density * v_exit
+        )
     else:
         v_pressure = 0.0
 
@@ -160,8 +164,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Debug TERRA on/off and shifting/frozen nozzle performance cases."
     )
-    parser.add_argument("--pc-psi", type=float, default=1000.0, help="Chamber pressure [psi].")
-    parser.add_argument("--pe-pa", type=float, default=101325.0, help="Exit pressure [Pa].")
+    parser.add_argument(
+        "--pc-psi", type=float, default=1000.0, help="Chamber pressure [psi]."
+    )
+    parser.add_argument(
+        "--pe-pa", type=float, default=101325.0, help="Exit pressure [Pa]."
+    )
     parser.add_argument(
         "--ambient-pa",
         type=float,
@@ -242,4 +250,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
