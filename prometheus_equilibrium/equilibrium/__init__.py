@@ -74,6 +74,7 @@ from prometheus_equilibrium.equilibrium.solution import EquilibriumSolution
 from prometheus_equilibrium.equilibrium.solver import (
     EquilibriumSolver,
     GordonMcBrideSolver,
+    HybridSolver,
     MajorSpeciesSolver,
     PEPSolver,
 )
@@ -90,6 +91,7 @@ __all__ = [
     "MajorSpeciesSolver",
     "PEPSolver",
     "GordonMcBrideSolver",
+    "HybridSolver",
     "PerformanceSolver",
     "RocketPerformanceResult",
     "RocketPerformanceComparison",

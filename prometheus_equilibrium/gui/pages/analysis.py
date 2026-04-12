@@ -7,7 +7,7 @@ from prometheus_equilibrium.gui.widgets.graph_canvas import GraphCanvas
 
 _NO_HISTORY_MSG = (
     'Enable "Record Convergence History"\n'
-    "in the Options menu to view\n"
+    "in the Solver Options panel to view\n"
     "convergence plots."
 )
 

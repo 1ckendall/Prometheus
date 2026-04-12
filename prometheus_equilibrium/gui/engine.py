@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -24,7 +26,11 @@ from prometheus_equilibrium.equilibrium.performance import (
     RocketPerformanceComparison,
 )
 from prometheus_equilibrium.equilibrium.problem import EquilibriumProblem, ProblemType
-from prometheus_equilibrium.equilibrium.solver import GordonMcBrideSolver
+from prometheus_equilibrium.equilibrium.solver import (
+    GordonMcBrideSolver,
+    HybridSolver,
+    MajorSpeciesSolver,
+)
 
 _PA_PER_MPA = 1_000_000.0
 _PA_PER_PSI = 6894.757
@@ -141,6 +147,11 @@ class EngineDock(QDockWidget):
         locale.setNumberOptions(QLocale.RejectGroupSeparator)
         self.double_validator.setLocale(locale)
         self.int_validator = QIntValidator(2, 10000, self)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         dock_contents = QWidget()
         layout = QVBoxLayout(dock_contents)
@@ -264,6 +275,32 @@ class EngineDock(QDockWidget):
         # 2.5 Solver Options
         group_solver_opts = QGroupBox("Solver Options")
         solver_opts_layout = QVBoxLayout()
+
+        solver_combo_layout = QHBoxLayout()
+        solver_combo_layout.addWidget(QLabel("Algorithm:"))
+        self.solver_combo = QComboBox()
+        self.solver_combo.addItem("Gordon-McBride", "gmcb")
+        self.solver_combo.addItem("Hybrid (MSS seed + G-McB)", "hybrid")
+        self.solver_combo.addItem("Major Species", "mss")
+        self.solver_combo.setToolTip(
+            "Gordon-McBride: fast single Newton loop (recommended).\n"
+            "Hybrid: seeds G-McB with a composition estimate from Major Species "
+            "— faster for multi-element propellants (CH\u2084/O\u2082, APCP).\n"
+            "Major Species: alternative Newton loop, slower but independent."
+        )
+        self.solver_combo.currentIndexChanged.connect(self._on_solver_changed)
+        solver_combo_layout.addWidget(self.solver_combo)
+        solver_opts_layout.addLayout(solver_combo_layout)
+
+        self.check_capture_history = QCheckBox("Record Convergence History")
+        self.check_capture_history.setChecked(True)
+        self.check_capture_history.setToolTip(
+            "Store per-iteration residuals and mole fractions for convergence plots. "
+            "Disable to reduce memory usage on large sweeps."
+        )
+        self.check_capture_history.stateChanged.connect(self._on_solver_changed)
+        solver_opts_layout.addWidget(self.check_capture_history)
+
         self.check_nozzle_profile = QCheckBox("Compute Nozzle Profile (15 pts)")
         self.check_nozzle_profile.setChecked(False)
         self.check_nozzle_profile.setToolTip(
@@ -271,6 +308,21 @@ class EngineDock(QDockWidget):
             "Disable to speed up each calculation point."
         )
         solver_opts_layout.addWidget(self.check_nozzle_profile)
+
+        max_atoms_layout = QHBoxLayout()
+        max_atoms_layout.addWidget(QLabel("Max product atoms:"))
+        self.spin_max_atoms = QSpinBox()
+        self.spin_max_atoms.setRange(3, 50)
+        self.spin_max_atoms.setValue(6)
+        self.spin_max_atoms.setToolTip(
+            "Maximum number of atoms in any product species.\n"
+            "Lower values run faster but exclude large molecules.\n"
+            "6 is correct for KNSB (K\u2082CO\u2083 = 6 atoms); raise if your\n"
+            "propellant requires larger species."
+        )
+        max_atoms_layout.addWidget(self.spin_max_atoms)
+        solver_opts_layout.addLayout(max_atoms_layout)
+
         group_solver_opts.setLayout(solver_opts_layout)
         layout.addWidget(group_solver_opts)
 
@@ -294,15 +346,39 @@ class EngineDock(QDockWidget):
         layout.addWidget(self.run_progress_bar)
 
         layout.addStretch()
-        self.setWidget(dock_contents)
+        scroll_area.setWidget(dock_contents)
+        self.setWidget(scroll_area)
 
         # Ensure pressure-related labels are initialised consistently.
         self.refresh_pressure_labels()
 
         # Solver components
-        self.solver = GordonMcBrideSolver(capture_history=True)
+        self.solver = self._make_solver()
         self.worker = None
         self._last_report_payload = None
+
+    def _make_solver(self):
+        """Construct the equilibrium solver matching the current dock settings."""
+        key = (
+            self.solver_combo.currentData() if hasattr(self, "solver_combo") else "gmcb"
+        )
+        capture = (
+            self.check_capture_history.isChecked()
+            if hasattr(self, "check_capture_history")
+            else True
+        )
+        if key == "hybrid":
+            return HybridSolver(capture_history=capture)
+        if key == "mss":
+            return MajorSpeciesSolver(capture_history=capture)
+        return GordonMcBrideSolver(capture_history=capture)
+
+    def _on_solver_changed(self, _index: int) -> None:
+        self.solver = self._make_solver()
+
+    def _max_atoms(self) -> int:
+        """Return the max_atoms limit from the dock spinbox."""
+        return self.spin_max_atoms.value() if hasattr(self, "spin_max_atoms") else 6
 
     def on_db_selection_changed(self, state):
         # Notify species explorer to refresh its list
@@ -747,7 +823,9 @@ class EngineDock(QDockWidget):
                         self.main_window.statusBar().showMessage(msg, 5000)
                         return
                     products = spec_db.get_species(
-                        mixture.elements, max_atoms=20, enabled_databases=enabled_dbs
+                        mixture.elements,
+                        max_atoms=self._max_atoms(),
+                        enabled_databases=enabled_dbs,
                     )
 
                     pc_pa = self._pressure_input_to_pa(pc_input)
@@ -804,7 +882,9 @@ class EngineDock(QDockWidget):
                     self.main_window.statusBar().showMessage(msg, 5000)
                     return
                 products = spec_db.get_species(
-                    mixture.elements, max_atoms=20, enabled_databases=enabled_dbs
+                    mixture.elements,
+                    max_atoms=self._max_atoms(),
+                    enabled_databases=enabled_dbs,
                 )
 
                 for pc_input in pc_inputs:

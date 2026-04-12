@@ -95,28 +95,6 @@ class ProPepUI(QMainWindow):
         menu_file.addAction("Export Results...", self.export_results)
 
         menu_options = menubar.addMenu("Options")
-        solver_menu = menu_options.addMenu("Select Solver Engine")
-
-        act_cea = solver_menu.addAction("Gordon-McBride (CEA)")
-        act_major = solver_menu.addAction("Major-Species Newton")
-
-        solver_group = QActionGroup(self)
-        for act in [act_cea, act_major]:
-            act.setCheckable(True)
-            solver_group.addAction(act)
-
-        act_cea.setChecked(True)
-        solver_group.setExclusive(True)
-        self.solver_group = solver_group
-        solver_group.triggered.connect(self.on_solver_changed)
-
-        # Convergence history toggle
-        self.action_capture_history = menu_options.addAction(
-            "Record Convergence History"
-        )
-        self.action_capture_history.setCheckable(True)
-        self.action_capture_history.setChecked(True)
-        self.action_capture_history.triggered.connect(self._on_capture_history_toggled)
 
         # Unit System
         units_menu = menu_options.addMenu("Select Unit System")
@@ -132,28 +110,6 @@ class ProPepUI(QMainWindow):
         unit_group.setExclusive(True)
         action_si.triggered.connect(lambda: self.change_units("SI"))
         action_us.triggered.connect(lambda: self.change_units("US"))
-
-    def on_solver_changed(self, action):
-        from prometheus_equilibrium.equilibrium.solver import (
-            GordonMcBrideSolver,
-            MajorSpeciesSolver,
-        )
-
-        capture = self.action_capture_history.isChecked()
-        text = action.text()
-        if "Gordon-McBride" in text:
-            self.engine_dock.solver = GordonMcBrideSolver(capture_history=capture)
-        elif "Major-Species Newton" in text:
-            self.engine_dock.solver = MajorSpeciesSolver(capture_history=capture)
-        else:
-            self.statusBar().showMessage(f"Unknown solver selection: {text}", 5000)
-            return
-        self.statusBar().showMessage(f"Solver engine changed to {text}", 3000)
-
-    def _on_capture_history_toggled(self, checked: bool) -> None:
-        """Propagate the history-capture setting to the active solver."""
-        if hasattr(self, "engine_dock"):
-            self.engine_dock.solver.capture_history = checked
 
     @staticmethod
     def _safe_float(text: str, default: float = 0.0) -> float:
