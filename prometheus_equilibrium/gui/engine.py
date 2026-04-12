@@ -248,28 +248,51 @@ class EngineDock(QDockWidget):
 
         # 2. Performance Results
         group_results = QGroupBox("Solver Results (Nominal)")
-        results_form = QFormLayout()
+        results_grid = QGridLayout()
         self.res_isp = QLabel("---")
         self.res_isp_frozen = QLabel("---")
         self.res_cstar = QLabel("---")
         self.res_cstar_frozen = QLabel("---")
         self.res_tc = QLabel("---")
+        self.res_tc_frozen = QLabel("---")
         for w in (
             self.res_isp,
             self.res_isp_frozen,
             self.res_cstar,
             self.res_cstar_frozen,
             self.res_tc,
+            self.res_tc_frozen,
         ):
             w.setStyleSheet("font-weight: bold; color: #2a82da; font-size: 14px;")
+            w.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        results_form.addRow("Shifting / Frozen", QLabel(""))
-        results_form.addRow("Isp (actual, s):", self.res_isp)
-        results_form.addRow("Isp (actual, frozen, s):", self.res_isp_frozen)
-        results_form.addRow("C* (m/s):", self.res_cstar)
-        results_form.addRow("C* (frozen, m/s):", self.res_cstar_frozen)
-        results_form.addRow("Chamber Temp (K):", self.res_tc)
-        group_results.setLayout(results_form)
+        self.results_shift_header = QLabel("Shifting")
+        self.results_frozen_header = QLabel("Frozen")
+        for hdr in (self.results_shift_header, self.results_frozen_header):
+            hdr.setStyleSheet("font-weight: bold;")
+            hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        results_grid.addWidget(QLabel(""), 0, 0)
+        results_grid.addWidget(self.results_shift_header, 0, 1)
+        results_grid.addWidget(self.results_frozen_header, 0, 2)
+
+        result_rows = [
+            ("Isp (s):", self.res_isp, self.res_isp_frozen),
+            ("C* (m/s):", self.res_cstar, self.res_cstar_frozen),
+            ("Chamber Temp (K):", self.res_tc, self.res_tc_frozen),
+        ]
+        for idx, (metric, shifting_value, frozen_value) in enumerate(
+            result_rows, start=1
+        ):
+            metric_label = QLabel(metric)
+            metric_label.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            results_grid.addWidget(metric_label, idx, 0)
+            results_grid.addWidget(shifting_value, idx, 1)
+            results_grid.addWidget(frozen_value, idx, 2)
+
+        group_results.setLayout(results_grid)
         layout.addWidget(group_results)
 
         # 2.5 Solver Options
@@ -971,6 +994,7 @@ class EngineDock(QDockWidget):
             msg = result.get("message", "Unknown performance error")
             tb = result.get("traceback", "")
             self.res_tc.setText("ERROR")
+            self.res_tc_frozen.setText("ERROR")
             self.main_window.statusBar().showMessage(f"Performance Error: {msg}", 12000)
             self._render_error_report("Performance Solver Error", msg, tb)
             self._last_report_payload = None
@@ -978,6 +1002,7 @@ class EngineDock(QDockWidget):
 
         if isinstance(result, str):
             self.res_tc.setText("ERROR")
+            self.res_tc_frozen.setText("ERROR")
             self.main_window.statusBar().showMessage(
                 f"Performance Error: {result}", 12000
             )
@@ -991,6 +1016,7 @@ class EngineDock(QDockWidget):
         sweep_label = payload.get("sweep_label", "Run Index")
         if not cases:
             self.res_tc.setText("ERROR")
+            self.res_tc_frozen.setText("ERROR")
             self.main_window.statusBar().showMessage("No results returned.", 10000)
             self._render_error_report(
                 "Performance Solver Error", "No results returned."
@@ -1001,6 +1027,7 @@ class EngineDock(QDockWidget):
         _, perf = cases[0]
         if isinstance(perf, str):
             self.res_tc.setText("ERROR")
+            self.res_tc_frozen.setText("ERROR")
             self.main_window.statusBar().showMessage(
                 f"Performance Error: {perf}", 12000
             )
@@ -1014,6 +1041,7 @@ class EngineDock(QDockWidget):
 
         if shifting.chamber.converged and frozen.chamber.converged:
             self.res_tc.setText(f"{shifting.chamber.temperature:.1f}")
+            self.res_tc_frozen.setText(f"{frozen.chamber.temperature:.1f}")
             self.res_cstar.setText(f"{shifting.cstar:.1f}")
             self.res_cstar_frozen.setText(f"{frozen.cstar:.1f}")
             self.res_isp.setText(f"{shifting.isp_actual:.1f}")
@@ -1050,6 +1078,7 @@ class EngineDock(QDockWidget):
 
         else:
             self.res_tc.setText("FAIL")
+            self.res_tc_frozen.setText("FAIL")
             fail_msg = "Performance solve failed to converge."
             self.main_window.statusBar().showMessage(fail_msg, 5000)
             self._render_error_report("Performance Solver Failure", fail_msg)
@@ -1065,6 +1094,7 @@ class EngineDock(QDockWidget):
                 msg = result.get("message", "Unknown solver error")
                 tb = result.get("traceback", "")
                 self.res_tc.setText("ERROR")
+                self.res_tc_frozen.setText("ERROR")
                 self.main_window.statusBar().showMessage(f"Solver Error: {msg}", 10000)
                 self._render_error_report("Equilibrium Solver Error", msg, tb)
                 self._last_report_payload = None
@@ -1072,6 +1102,7 @@ class EngineDock(QDockWidget):
             sol = result.get("solution")
         elif isinstance(result, str):
             self.res_tc.setText("ERROR")
+            self.res_tc_frozen.setText("ERROR")
             self.main_window.statusBar().showMessage(f"Solver Error: {result}", 10000)
             self._render_error_report("Equilibrium Solver Error", result)
             self._last_report_payload = None
@@ -1082,6 +1113,10 @@ class EngineDock(QDockWidget):
         # Success
         if sol.converged:
             self.res_tc.setText(f"{sol.temperature:.1f}")
+            self.res_tc_frozen.setText("---")
+            self.res_isp.setText("---")
+            self.res_isp_frozen.setText("---")
+            self.res_cstar_frozen.setText("---")
             # Approximate c* (assuming frozen gamma for display)
             try:
                 gamma = sol.gamma
@@ -1111,6 +1146,7 @@ class EngineDock(QDockWidget):
 
         else:
             self.res_tc.setText("FAIL")
+            self.res_tc_frozen.setText("FAIL")
             fail_msg = "Solver failed to converge."
             self.main_window.statusBar().showMessage(fail_msg, 5000)
             self._render_error_report("Equilibrium Solver Failure", fail_msg)
