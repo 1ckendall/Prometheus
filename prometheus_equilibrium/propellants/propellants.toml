@@ -8041,8 +8041,8 @@ roles = ["fuel"]
 source = "ProPEP conversion"
 
 [[ingredient]]
-id = "TMHN_TRIMETHYLHYDRAZINENITRAT"
-name = "Tmhn(Trimethylhydrazinenitrat"
+id = "TMHN_TRIMETHYLHYDRAZINENITRATE"
+name = "Tmhn(Trimethylhydrazinenitrate)"
 elements = {C = 3.000000, H = 11.000000, N = 3.000000, O = 3.000000}
 dHf298 = -317879.425104
 density = 1339.707388
@@ -8060,7 +8060,7 @@ source = "ProPEP conversion"
 
 [[ingredient]]
 id = "TNSD"
-name = "Tnsd"
+name = "TNSD"
 elements = {C = 6.000000, H = 10.000000, N = 8.000000, O = 8.000000}
 dHf298 = 114585.074160
 density = 1699.546149
@@ -8069,7 +8069,7 @@ source = "ProPEP conversion"
 
 [[ingredient]]
 id = "TNSU"
-name = "Tnsu"
+name = "TNSU"
 elements = {C = 7.000000, H = 12.000000, N = 8.000000, O = 8.000000}
 dHf298 = 21101.229960
 density = 1718.922083
@@ -8078,7 +8078,7 @@ source = "ProPEP conversion"
 
 [[ingredient]]
 id = "TNT_PER_ORD_HANDBOOK"
-name = "Tnt Per Ord Handbook)"
+name = "TNT Per Ord Handbook)"
 elements = {C = 7.000000, H = 5.000000, N = 3.000000, O = 6.000000}
 dHf298 = -75075.302752
 density = 1608.202464
@@ -8087,7 +8087,7 @@ source = "ProPEP conversion"
 
 [[ingredient]]
 id = "TNT"
-name = "Tnt"
+name = "TNT"
 elements = {C = 7.000000, H = 5.000000, N = 3.000000, O = 6.000000}
 dHf298 = 75075.302752
 density = 1652.490311
@@ -8096,7 +8096,7 @@ source = "ProPEP conversion"
 
 [[ingredient]]
 id = "TNTAD"
-name = "Tntad"
+name = "TNTAD"
 elements = {C = 6.000000, H = 10.000000, N = 8.000000, O = 8.000000}
 dHf298 = 72795.223584
 density = 1799.193806

@@ -68,6 +68,7 @@ class PerformanceWorker(QThread):
         spec_db,
         sweep_axis="none",
         sweep_label="Run Index",
+        compute_profile=False,
     ):
         super().__init__()
         self.jobs = jobs
@@ -76,6 +77,7 @@ class PerformanceWorker(QThread):
         self.ambient_pressure = ambient_pressure
         self.sweep_axis = sweep_axis
         self.sweep_label = sweep_label
+        self.compute_profile = compute_profile
         # Performance expansion can require condensed-phase partner swaps at low T.
         self.perf_solver = PerformanceSolver(solver, db=spec_db)
 
@@ -93,6 +95,7 @@ class PerformanceWorker(QThread):
                     pe_pa=pe_pa,
                     area_ratio=area_ratio,
                     ambient_pressure=self.ambient_pressure,
+                    compute_profile=self.compute_profile,
                 )
                 cases.append((sweep_value, pair))
                 self.progress.emit(i, total, f"Case {i}/{total}")
@@ -258,6 +261,19 @@ class EngineDock(QDockWidget):
         group_results.setLayout(results_form)
         layout.addWidget(group_results)
 
+        # 2.5 Solver Options
+        group_solver_opts = QGroupBox("Solver Options")
+        solver_opts_layout = QVBoxLayout()
+        self.check_nozzle_profile = QCheckBox("Compute Nozzle Profile (15 pts)")
+        self.check_nozzle_profile.setChecked(False)
+        self.check_nozzle_profile.setToolTip(
+            "Compute 15 intermediate states from chamber to exit for expansion plots. "
+            "Disable to speed up each calculation point."
+        )
+        solver_opts_layout.addWidget(self.check_nozzle_profile)
+        group_solver_opts.setLayout(solver_opts_layout)
+        layout.addWidget(group_solver_opts)
+
         # 3. Actions
         btn_layout = QHBoxLayout()
         self.btn_calculate = QPushButton("Calculate")
@@ -284,7 +300,7 @@ class EngineDock(QDockWidget):
         self.refresh_pressure_labels()
 
         # Solver components
-        self.solver = GordonMcBrideSolver(capture_history=False)
+        self.solver = GordonMcBrideSolver(capture_history=True)
         self.worker = None
         self._last_report_payload = None
 
@@ -854,6 +870,7 @@ class EngineDock(QDockWidget):
             self.main_window.spec_db,
             sweep_axis=sweep_axis,
             sweep_label=sweep_label,
+            compute_profile=self.check_nozzle_profile.isChecked(),
         )
         self._start_run_progress(len(jobs))
         self.worker.progress.connect(self._update_run_progress)

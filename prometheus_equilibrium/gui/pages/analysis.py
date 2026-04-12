@@ -1,8 +1,15 @@
 import math
 
+import numpy as np
 from PySide6.QtWidgets import QGridLayout, QTabWidget, QTextEdit, QVBoxLayout, QWidget
 
 from prometheus_equilibrium.gui.widgets.graph_canvas import GraphCanvas
+
+_NO_HISTORY_MSG = (
+    'Enable "Record Convergence History"\n'
+    "in the Options menu to view\n"
+    "convergence plots."
+)
 
 
 class AnalysisPage(QWidget):
@@ -95,50 +102,62 @@ class AnalysisPage(QWidget):
         )
         layout.addWidget(self.results_text)
 
+    # ------------------------------------------------------------------ helpers
+
+    def _setup_axes(self, canvas, title=None, xlabel=None, ylabel=None):
+        """Clear a canvas and re-apply dark-theme axis styling."""
+        canvas.axes.clear()
+        canvas.axes.set_title(title or canvas.title_text, color="white")
+        canvas.axes.set_xlabel(xlabel if xlabel is not None else canvas.xlabel_text, color="white")
+        canvas.axes.set_ylabel(ylabel if ylabel is not None else canvas.ylabel_text, color="white")
+        canvas.axes.tick_params(colors="white")
+        canvas.axes.grid(True, linestyle="--", alpha=0.3)
+
+    def _placeholder(self, canvas, message):
+        """Show a centered placeholder message on a canvas."""
+        self._setup_axes(canvas, xlabel="", ylabel="")
+        canvas.axes.tick_params(colors="white", labelbottom=False, labelleft=False)
+        canvas.axes.grid(False)
+        canvas.axes.text(
+            0.5,
+            0.5,
+            message,
+            transform=canvas.axes.transAxes,
+            ha="center",
+            va="center",
+            color="#aaaaaa",
+            fontsize=10,
+            style="italic",
+            wrap=True,
+        )
+        canvas.draw()
+
+    # ------------------------------------------------------- convergence plots
+
     def update_convergence_plots(self, solution):
         """Update the convergence tab with data from the last solve."""
         if not solution.history:
+            self._placeholder(self.canvas_concentration, _NO_HISTORY_MSG)
+            self._placeholder(self.canvas_temperature_conv, _NO_HISTORY_MSG)
             return
 
         iterations = list(range(1, len(solution.history) + 1))
 
         # 1. Temperature plot
         temps = [step.temperature for step in solution.history]
-        self.canvas_temperature_conv.axes.clear()
-        self.canvas_temperature_conv.axes.set_title(
-            self.canvas_temperature_conv.title_text, color="white"
+        self._setup_axes(self.canvas_temperature_conv)
+        self.canvas_temperature_conv.axes.plot(
+            iterations, temps, "o-", color="#2a82da"
         )
-        self.canvas_temperature_conv.axes.set_xlabel(
-            self.canvas_temperature_conv.xlabel_text, color="white"
-        )
-        self.canvas_temperature_conv.axes.set_ylabel(
-            self.canvas_temperature_conv.ylabel_text, color="white"
-        )
-        self.canvas_temperature_conv.axes.grid(True, linestyle="--", alpha=0.3)
-        self.canvas_temperature_conv.axes.plot(iterations, temps, "o-", color="#2a82da")
         self.canvas_temperature_conv.draw()
 
         # 2. Concentration plot (top 10 species)
-        import math
+        self._setup_axes(self.canvas_concentration)
 
-        self.canvas_concentration.axes.clear()
-        self.canvas_concentration.axes.set_title(
-            self.canvas_concentration.title_text, color="white"
-        )
-        self.canvas_concentration.axes.set_xlabel(
-            self.canvas_concentration.xlabel_text, color="white"
-        )
-        self.canvas_concentration.axes.set_ylabel(
-            self.canvas_concentration.ylabel_text, color="white"
-        )
-        self.canvas_concentration.axes.grid(True, linestyle="--", alpha=0.3)
-
-        # Get all species that appeared in the history
         all_sp_names = set()
         for step in solution.history:
             all_sp_names.update(step.mole_fractions.keys())
 
-        # Pick top 10 by final concentration
         final_step = solution.history[-1]
         sorted_sp = sorted(
             all_sp_names,
@@ -161,65 +180,112 @@ class AnalysisPage(QWidget):
 
         self.canvas_concentration.draw()
 
+    # -------------------------------------------------------- expansion plots
+
     def update_expansion_plots(self, result):
-        """Update expansion plots from one or two RocketPerformanceResult objects."""
+        """Update expansion plots from a RocketPerformanceComparison.
+
+        Always shows at least chamber, throat, and exit as labelled points.
+        When a full nozzle profile is available it draws the smooth curve
+        instead.
+        """
         shifting = getattr(result, "shifting", result)
         frozen = getattr(result, "frozen", None)
 
-        if not shifting.profile:
-            return
+        _STATION_LABELS = ["Chamber", "Throat", "Exit"]
 
-        def _extract_profile(perf):
-            P = [sol.pressure for sol in perf.profile]
-            T = [sol.temperature for sol in perf.profile]
-            MW = [sol.gas_mean_molar_mass * 1000 for sol in perf.profile]
-            gamma_vals = [sol.gamma for sol in perf.profile]
-            mach_vals = []
-            for sol in perf.profile:
-                if hasattr(sol, "mach_number"):
-                    mach_vals.append(sol.mach_number)
-                else:
-                    dH_mass = perf.chamber.total_enthalpy - sol.total_enthalpy
-                    v = math.sqrt(max(0.0, 2 * dH_mass))
-                    mach_vals.append(v / sol.speed_of_sound)
-            return P, T, mach_vals, MW, gamma_vals
+        def _mach(perf, sol):
+            if hasattr(sol, "mach_number"):
+                return sol.mach_number
+            dH_mass = perf.chamber.total_enthalpy - sol.total_enthalpy
+            v = math.sqrt(max(0.0, 2 * dH_mass))
+            return v / sol.speed_of_sound
 
-        sP, sT, sMach, sMW, sGamma = _extract_profile(shifting)
-        fP, fT, fMach, fMW, fGamma = (None, None, None, None, None)
-        if frozen is not None and frozen.profile:
-            fP, fT, fMach, fMW, fGamma = _extract_profile(frozen)
+        def _extract(perf):
+            if perf.profile:
+                P = [sol.pressure for sol in perf.profile]
+                T = [sol.temperature for sol in perf.profile]
+                MW = [sol.gas_mean_molar_mass * 1000 for sol in perf.profile]
+                gamma_vals = [sol.gamma for sol in perf.profile]
+                mach_vals = [_mach(perf, sol) for sol in perf.profile]
+                return P, T, mach_vals, MW, gamma_vals, True
+            # Minimum: chamber + throat + exit
+            stations = [perf.chamber, perf.throat, perf.exit]
+            P = [s.pressure for s in stations]
+            T = [s.temperature for s in stations]
+            MW = [s.gas_mean_molar_mass * 1000 for s in stations]
+            gamma_vals = [s.gamma for s in stations]
+            mach_vals = [_mach(perf, s) for s in stations]
+            return P, T, mach_vals, MW, gamma_vals, False
 
-        def _plot_two(canvas, x1, y1, label1, x2=None, y2=None, label2=None):
-            canvas.axes.clear()
-            canvas.axes.set_title(canvas.title_text, color="white")
-            canvas.axes.set_xlabel(canvas.xlabel_text, color="white")
-            canvas.axes.set_ylabel(canvas.ylabel_text, color="white")
-            canvas.axes.grid(True, linestyle="--", alpha=0.3)
-            canvas.axes.semilogx(
-                x1, y1, "o-", markersize=4, color="#2a82da", label=label1
-            )
-            if x2 is not None and y2 is not None:
-                canvas.axes.semilogx(
-                    x2, y2, "s--", markersize=4, color="#f39c12", label=label2
+        sP, sT, sMach, sMW, sGamma, s_profile = _extract(shifting)
+        fP = fT = fMach = fMW = fGamma = None
+        if frozen is not None:
+            fP, fT, fMach, fMW, fGamma, _ = _extract(frozen)
+
+        def _plot(canvas, y_s, y_f_or_none, ylabel):
+            self._setup_axes(canvas, ylabel=ylabel)
+            ax = canvas.axes
+
+            style_s = "o-" if s_profile else "o--"
+            ms = 4 if s_profile else 7
+            ax.semilogx(sP, y_s, style_s, markersize=ms, color="#2a82da", label="Shifting")
+
+            if not s_profile:
+                for xi, yi, lbl in zip(sP, y_s, _STATION_LABELS):
+                    ax.annotate(
+                        lbl,
+                        (xi, yi),
+                        textcoords="offset points",
+                        xytext=(0, 8),
+                        ha="center",
+                        color="#2a82da",
+                        fontsize=7,
+                    )
+
+            if y_f_or_none is not None and fP is not None:
+                style_f = "s--" if s_profile else "s:"
+                ax.semilogx(
+                    fP, y_f_or_none, style_f, markersize=ms, color="#f39c12", label="Frozen"
                 )
-                canvas.axes.legend(fontsize="small", framealpha=0.5)
-            canvas.axes.invert_xaxis()  # Chamber (high P) on left
+                if not s_profile:
+                    for xi, yi, lbl in zip(fP, y_f_or_none, _STATION_LABELS):
+                        ax.annotate(
+                            lbl,
+                            (xi, yi),
+                            textcoords="offset points",
+                            xytext=(0, -13),
+                            ha="center",
+                            color="#f39c12",
+                            fontsize=7,
+                        )
+                ax.legend(fontsize="small", framealpha=0.5)
+
+            ax.invert_xaxis()
             canvas.draw()
 
-        _plot_two(self.canvas_exp_temp, sP, sT, "Shifting", fP, fT, "Frozen")
-        _plot_two(self.canvas_exp_mach, sP, sMach, "Shifting", fP, fMach, "Frozen")
-        _plot_two(self.canvas_exp_mw, sP, sMW, "Shifting", fP, fMW, "Frozen")
-        _plot_two(self.canvas_exp_gamma, sP, sGamma, "Shifting", fP, fGamma, "Frozen")
+        _plot(self.canvas_exp_temp, sT, fT, "T (K)")
+        _plot(self.canvas_exp_mach, sMach, fMach, "Mach")
+        _plot(self.canvas_exp_mw, sMW, fMW, "g/mol")
+        _plot(self.canvas_exp_gamma, sGamma, fGamma, "gamma")
+
+    # -------------------------------------------------- performance viz plots
 
     def update_performance_plots(
         self, cases, sweep_axis="none", sweep_label="Run Index"
     ):
-        """Update performance charts from O/F or Pc sweep results."""
+        """Update performance charts from O/F or Pc sweep results.
+
+        For single-point (non-sweep) runs, shows a per-station summary of key
+        properties instead of leaving the tab empty.
+        """
         sweep_cases = [(x, perf) for x, perf in cases if x is not None]
         if not sweep_cases:
+            _, perf = cases[0]
+            self._update_single_point_plots(perf)
             return
 
-        x = [of for of, _ in sweep_cases]
+        x = [v for v, _ in sweep_cases]
         isp_shift = [perf.shifting.isp_actual for _, perf in sweep_cases]
         isp_frozen = [perf.frozen.isp_actual for _, perf in sweep_cases]
         cstar_shift = [perf.shifting.cstar for _, perf in sweep_cases]
@@ -228,28 +294,129 @@ class AnalysisPage(QWidget):
         area_shift = [perf.shifting.area_ratio for _, perf in sweep_cases]
         area_frozen = [perf.frozen.area_ratio for _, perf in sweep_cases]
 
-        def _plot(canvas, y1, y2=None, label1="Shifting", label2="Frozen"):
-            canvas.axes.clear()
-            canvas.axes.set_title(canvas.title_text, color="white")
-            canvas.axes.set_xlabel(sweep_label, color="white")
-            canvas.axes.set_ylabel(canvas.ylabel_text, color="white")
-            canvas.axes.grid(True, linestyle="--", alpha=0.3)
+        def _line(canvas, y1, y2=None, label1="Shifting", label2="Frozen"):
+            self._setup_axes(canvas, xlabel=sweep_label)
             canvas.axes.plot(x, y1, "o-", color="#2a82da", label=label1)
             if y2 is not None:
                 canvas.axes.plot(x, y2, "s--", color="#f39c12", label=label2)
                 canvas.axes.legend(fontsize="small", framealpha=0.5)
-            # Improve readability for dense sweeps and avoid clipped x-labels.
             canvas.axes.tick_params(axis="x", labelrotation=30)
             canvas.figure.subplots_adjust(bottom=0.22)
             canvas.draw()
 
-        _plot(self.canvas_isp, isp_shift, isp_frozen)
-        _plot(self.canvas_cstar, cstar_shift, cstar_frozen)
-        _plot(self.canvas_tc, tc, None, label1="Chamber")
-        _plot(
+        _line(self.canvas_isp, isp_shift, isp_frozen)
+        _line(self.canvas_cstar, cstar_shift, cstar_frozen)
+        _line(self.canvas_tc, tc, label1="Chamber")
+        _line(
             self.canvas_expansion,
             area_shift,
             area_frozen,
             label1="Ae/At Shift",
             label2="Ae/At Frozen",
         )
+
+    def _update_single_point_plots(self, perf):
+        """Performance summary charts for a single (non-sweep) calculation.
+
+        Repurposes the four performance canvases to show a station-by-station
+        breakdown of the key properties rather than leaving them blank.
+        """
+        shifting = perf.shifting
+        frozen = perf.frozen
+        stations = ["Chamber", "Throat", "Exit"]
+        x = np.arange(3)
+        width = 0.35
+
+        # ---- Isp comparison: actual / vac / SL for shifting vs frozen ----
+        categories = ["Actual", "Vacuum", "Sea Level"]
+        isp_s = [shifting.isp_actual, shifting.isp_vac, shifting.isp_sl]
+        isp_f = [frozen.isp_actual, frozen.isp_vac, frozen.isp_sl]
+        xc = np.arange(len(categories))
+
+        self._setup_axes(self.canvas_isp, title="Specific Impulse", xlabel="", ylabel="Isp (s)")
+        ax = self.canvas_isp.axes
+        bars_s = ax.bar(xc - width / 2, isp_s, width, label="Shifting", color="#2a82da")
+        bars_f = ax.bar(xc + width / 2, isp_f, width, label="Frozen", color="#f39c12")
+        ax.set_xticks(xc)
+        ax.set_xticklabels(categories)
+        ax.tick_params(colors="white")
+        ax.legend(fontsize="small", framealpha=0.5)
+        for bar in list(bars_s) + list(bars_f):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.5,
+                f"{bar.get_height():.1f}",
+                ha="center", va="bottom", color="white", fontsize=7,
+            )
+        self.canvas_isp.draw()
+
+        # ---- C* comparison: shifting vs frozen ----
+        self._setup_axes(
+            self.canvas_cstar,
+            title="Characteristic Velocity (C*)",
+            xlabel="",
+            ylabel="C* (m/s)",
+        )
+        ax = self.canvas_cstar.axes
+        cstar_vals = [shifting.cstar, frozen.cstar]
+        bars = ax.bar(
+            ["Shifting", "Frozen"],
+            cstar_vals,
+            color=["#2a82da", "#f39c12"],
+            width=0.4,
+        )
+        ax.tick_params(colors="white")
+        for bar in bars:
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 1,
+                f"{bar.get_height():.1f}",
+                ha="center", va="bottom", color="white", fontsize=9,
+            )
+        self.canvas_cstar.draw()
+
+        # ---- Station temperatures: chamber / throat / exit ----
+        T_s = [
+            shifting.chamber.temperature,
+            shifting.throat.temperature,
+            shifting.exit.temperature,
+        ]
+        T_f = [
+            frozen.chamber.temperature,
+            frozen.throat.temperature,
+            frozen.exit.temperature,
+        ]
+        self._setup_axes(
+            self.canvas_tc, title="Station Temperature", xlabel="", ylabel="T (K)"
+        )
+        ax = self.canvas_tc.axes
+        ax.bar(x - width / 2, T_s, width, label="Shifting", color="#2a82da")
+        ax.bar(x + width / 2, T_f, width, label="Frozen", color="#f39c12")
+        ax.set_xticks(x)
+        ax.set_xticklabels(stations)
+        ax.tick_params(colors="white")
+        ax.legend(fontsize="small", framealpha=0.5)
+        self.canvas_tc.draw()
+
+        # ---- Station gamma: chamber / throat / exit ----
+        g_s = [shifting.chamber.gamma, shifting.throat.gamma, shifting.exit.gamma]
+        g_f = [frozen.chamber.gamma, frozen.throat.gamma, frozen.exit.gamma]
+        self._setup_axes(
+            self.canvas_expansion,
+            title="Station Gamma (\u03b3)",
+            xlabel="",
+            ylabel="\u03b3",
+        )
+        ax = self.canvas_expansion.axes
+        ax.bar(x - width / 2, g_s, width, label="Shifting", color="#2a82da")
+        ax.bar(x + width / 2, g_f, width, label="Frozen", color="#f39c12")
+        ax.set_xticks(x)
+        ax.set_xticklabels(stations)
+        ax.tick_params(colors="white")
+        ax.legend(fontsize="small", framealpha=0.5)
+        # Tight y-range so small gamma differences are visible
+        all_g = g_s + g_f
+        g_min, g_max = min(all_g), max(all_g)
+        margin = max(0.02, (g_max - g_min) * 0.3)
+        ax.set_ylim(g_min - margin, g_max + margin)
+        self.canvas_expansion.draw()
