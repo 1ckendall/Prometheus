@@ -166,3 +166,9 @@ benchmark_output.txt
 benchmark_db_output.txt
 benchmark_debug.log
 solver_debug.log
+
+# GUI saved composition files
+*.prop
+
+# Debug / one-off script artifacts
+tools/tests/

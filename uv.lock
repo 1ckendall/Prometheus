@@ -92,12 +92,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/0d/52d98722666d6fc6c3dd4c76df339501d6efd40e0ff95e6186a7b7f0befd/black-26.3.1-py3-none-any.whl", hash = "sha256:2bd5aa94fc267d38bb21a70d7410a89f1a1d318841855f698746f8e7f51acd1b", size = 207542, upload-time = "2026-03-12T03:36:01.668Z" },
 ]
 
-[package.optional-dependencies]
-jupyter = [
-    { name = "ipython" },
-    { name = "tokenize-rt" },
-]
-
 [[package]]
 name = "certifi"
 version = "2026.2.25"
@@ -1344,11 +1338,9 @@ wheels = [
 name = "prometheus-equilibrium"
 source = { editable = "." }
 dependencies = [
-    { name = "black", extra = ["jupyter"] },
     { name = "loguru" },
     { name = "numba" },
     { name = "numpy" },
-    { name = "pre-commit" },
     { name = "scipy" },
     { name = "thermochem" },
 ]
@@ -1378,12 +1370,10 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "black", extras = ["jupyter"], specifier = ">=26.3.1" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "matplotlib", marker = "extra == 'gui'", specifier = ">=3.7" },
     { name = "numba", specifier = ">=0.60" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.6" },
     { name = "scipy", specifier = ">=1.13" },
     { name = "thermochem", specifier = ">=0.9" },
@@ -2077,15 +2067,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/19/ed/7e5d9ee1a454909f454e498c659294d083bff3438f792c719a6d7ad05148/thermochem-0.9.0.tar.gz", hash = "sha256:be9d8bccf78f0ded98e387e453058380857267da0b5d933d235ef713b5c8ee2a", size = 407458, upload-time = "2025-04-02T03:26:02.917Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c8/24/deb777e8722d03ea6fe97a8de30f25cec9302c9b0ac42e7aae5052de123c/thermochem-0.9.0-py2.py3-none-any.whl", hash = "sha256:84c92fe9d57dd1e5ccd2336c0d5358fff35239f2ef50b6ce5d9e618d3f557dda", size = 420990, upload-time = "2025-04-02T03:26:01.679Z" },
-]
-
-[[package]]
-name = "tokenize-rt"
-version = "6.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/69/ed/8f07e893132d5051d86a553e749d5c89b2a4776eb3a579b72ed61f8559ca/tokenize_rt-6.2.0.tar.gz", hash = "sha256:8439c042b330c553fdbe1758e4a05c0ed460dbbbb24a606f11f0dee75da4cad6", size = 5476, upload-time = "2025-05-23T23:48:00.035Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/33/f0/3fe8c6e69135a845f4106f2ff8b6805638d4e85c264e70114e8126689587/tokenize_rt-6.2.0-py2.py3-none-any.whl", hash = "sha256:a152bf4f249c847a66497a4a95f63376ed68ac6abf092a2f7cfb29d044ecff44", size = 6004, upload-time = "2025-05-23T23:47:58.812Z" },
 ]
 
 [[package]]
