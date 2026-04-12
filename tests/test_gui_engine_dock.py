@@ -110,6 +110,10 @@ class _DummyPerfComparison:
         shifting_exit = _DummySolution(2000.0, 101325.0)
         self.frozen = _DummyPerfResult(chamber, throat, frozen_exit)
         self.shifting = _DummyPerfResult(chamber, throat, shifting_exit)
+        self.frozen.isp_actual = 242.0
+        self.shifting.isp_actual = 250.0
+        self.frozen.cstar = 1710.0
+        self.shifting.cstar = 1800.0
         self.ambient_pressure = 101325.0
 
 
@@ -194,6 +198,25 @@ def test_performance_report_uses_selected_units_only(dock):
     assert "Temperature Unit: K" in text
     assert "Pressure Unit: MPa" in text
     assert "Pressure Unit: PSI" not in text
+
+
+def test_nominal_results_show_shifting_and_frozen_columns(dock):
+    payload = {
+        "ok": True,
+        "cases": [(None, _DummyPerfComparison())],
+        "sweep_axis": "none",
+        "sweep_label": "Run Index",
+    }
+    dock.on_perf_finished(payload)
+
+    assert dock.results_shift_header.text() == "Shifting"
+    assert dock.results_frozen_header.text() == "Frozen"
+    assert dock.res_isp.text() == "250.0"
+    assert dock.res_isp_frozen.text() == "242.0"
+    assert dock.res_cstar.text() == "1800.0"
+    assert dock.res_cstar_frozen.text() == "1710.0"
+    assert dock.res_tc.text() == "3000.0"
+    assert dock.res_tc_frozen.text() == "3000.0"
 
 
 def test_report_refresh_updates_units_after_calculation(dock):

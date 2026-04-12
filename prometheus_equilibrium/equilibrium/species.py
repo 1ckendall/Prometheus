@@ -1992,17 +1992,53 @@ class SpeciesDatabase:
             deduped[key] = sp
         return deduped
 
+    @staticmethod
+    def _sp_t_bounds(sp: Species) -> tuple:
+        """Return (T_low, T_high) for *sp*'s thermodynamic data, or (None, None).
+
+        Returns None bounds for species types without an explicit temperature
+        range (e.g. SyntheticSpecies with constant Cp), which are always kept.
+        """
+        if isinstance(sp, NASASevenCoeff):
+            return sp.T_low, sp.T_high
+        if isinstance(sp, (NASANineCoeff, ShomateCoeff)):
+            return sp.temperatures[0], sp.temperatures[-1]
+        try:
+            t = sp._JANAF__temperature  # type: ignore
+            return float(t[0]), float(t[-1])
+        except AttributeError:
+            return None, None
+
     def get_species(
         self,
         elements: set,
         max_atoms: Optional[int] = None,
         enabled_databases: Optional[List[str]] = None,
+        t_min: Optional[float] = None,
+        t_max: Optional[float] = None,
     ) -> List[Species]:
-        """Return unique product species from enabled databases for specified elements."""
+        """Return unique product species from enabled databases for specified elements.
+
+        Args:
+            elements: Set of element symbols the candidate species may contain.
+            max_atoms: If given, exclude species with more than this many total
+                atoms.  Reduces the product list for large element sets.
+            enabled_databases: If given, only include species from these source
+                names.
+            t_min: If given, exclude species whose entire valid temperature
+                range lies *above* t_min (i.e. species not valid below t_min
+                are removed).  Species without an explicit range are kept.
+            t_max: If given, exclude species whose entire valid temperature
+                range lies *below* t_max (i.e. species not valid above t_max
+                are removed).  Species without an explicit range are kept.
+
+        Returns:
+            De-duplicated list of candidate product species.
+        """
         if not self._all_species:
             raise RuntimeError("No species loaded — call SpeciesDatabase.load() first.")
 
-        # 1. Filter raw list by source and elements
+        # 1. Filter raw list by source, elements, atom count, and T range
         candidates = []
         for sp in self._all_species:
             if enabled_databases is not None and sp.source not in enabled_databases:
@@ -2018,6 +2054,17 @@ class SpeciesDatabase:
                 )
                 if total_atoms > max_atoms:
                     continue
+
+            if t_min is not None or t_max is not None:
+                sp_lo, sp_hi = self._sp_t_bounds(sp)
+                # Only filter when both bounds are known
+                if sp_lo is not None and sp_hi is not None:
+                    # Exclude species whose range lies entirely outside [t_min, t_max]
+                    if t_max is not None and sp_lo > t_max:
+                        continue
+                    if t_min is not None and sp_hi < t_min:
+                        continue
+
             candidates.append(sp)
 
         # 2. Deduplicate the filtered set

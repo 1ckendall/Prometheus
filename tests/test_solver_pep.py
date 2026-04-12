@@ -454,13 +454,13 @@ def test_refresh_thermo_species_set_drops_and_reintroduces_species():
 
     mix0 = Mixture([sp_hot], np.array([1.0]))
 
-    mix_hot, _ = EquilibriumSolver._refresh_thermo_species_set(
+    mix_hot, _, _g = EquilibriumSolver._refresh_thermo_species_set(
         mix0, species_pool, active_elements, T=3000.0
     )
     assert mix_hot.species == [sp_hot]
     assert mix_hot.moles[0] == pytest.approx(1.0)
 
-    mix_cool, _ = EquilibriumSolver._refresh_thermo_species_set(
+    mix_cool, _, _g = EquilibriumSolver._refresh_thermo_species_set(
         mix_hot, species_pool, active_elements, T=1000.0
     )
     assert mix_cool.species == [sp_cool]
