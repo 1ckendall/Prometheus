@@ -142,7 +142,6 @@ class EquilibriumProblem:
         constraint2: float,
         pressure: float = _P_REF,
         t_init: Optional[float] = None,
-        sp_entropy_mode: str = "total",
     ) -> None:
         self.reactants = dict(reactants)
         self.products = list(products)
@@ -151,13 +150,6 @@ class EquilibriumProblem:
         self.constraint2 = float(constraint2)
         self.pressure = float(pressure)
         self.t_init = float(t_init) if t_init is not None else 3000.0
-        mode = str(sp_entropy_mode).strip().lower()
-        if mode not in ("total", "total_normalized"):
-            raise ValueError(
-                "sp_entropy_mode must be 'total' or 'total_normalized', "
-                f"got {sp_entropy_mode!r}."
-            )
-        self.sp_entropy_mode = mode
 
     # ------------------------------------------------------------------
     # Alternative constructors

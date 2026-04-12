@@ -396,12 +396,11 @@ def test_shifting_sp_problem_default_uses_total_entropy_constraint(monkeypatch):
     sp_problem = captured["problem"]
     assert sp_problem.problem_type == ProblemType.SP
     assert sp_problem.constraint1 == pytest.approx(chamber.total_entropy)
-    assert sp_problem.sp_entropy_mode == "total"
     assert chamber.total_entropy != pytest.approx(chamber.total_gas_entropy)
 
 
 def test_shifting_sp_problem_total_mode_uses_raw_total_entropy(monkeypatch):
-    """Explicit total mode should use un-normalized whole-flow entropy."""
+    """Shifting SP setup should use raw whole-flow entropy as the constraint."""
     gas = _LogEntropyGas({"X": 1}, cp_over_r=4.0, s_ref_over_r=2.0, molar_mass_kg=0.02)
     condensed = _ConstantCondensedSpecies(
         {"X": 1}, cp_over_r=2.0, s_ref_over_r=15.0, molar_mass_kg=0.05
@@ -417,7 +416,7 @@ def test_shifting_sp_problem_total_mode_uses_raw_total_entropy(monkeypatch):
         lagrange_multipliers=np.zeros(0),
     )
 
-    perf = PerformanceSolver(sp_entropy_mode="total")
+    perf = PerformanceSolver()
     captured = {}
 
     def _fake_sp_solve(problem, guess=None, log_failure=True):
@@ -438,15 +437,6 @@ def test_shifting_sp_problem_total_mode_uses_raw_total_entropy(monkeypatch):
     sp_problem = captured["problem"]
     assert sp_problem.problem_type == ProblemType.SP
     assert sp_problem.constraint1 == pytest.approx(chamber.total_entropy)
-    assert sp_problem.sp_entropy_mode == "total"
-
-
-def test_performance_solver_rejects_gas_or_auto_entropy_modes():
-    """Gas-only and auto fallback modes are disallowed for shifting SP."""
-    with pytest.raises(ValueError, match="sp_entropy_mode"):
-        PerformanceSolver(sp_entropy_mode="gas")
-    with pytest.raises(ValueError, match="sp_entropy_mode"):
-        PerformanceSolver(sp_entropy_mode="auto")
 
 
 # ---------------------------------------------------------------------------

@@ -118,18 +118,18 @@ EquilibriumProblem  →  Solver.solve()  →  EquilibriumSolution
 ```
 EquilibriumSolver (ABC)
   ├── _ReactionAdjustmentBase
-  │     ├── MajorSpeciesSolver  ← recommended default
+  │     ├── MajorSpeciesSolver  ← alternative (slower)
   │     └── PEPSolver     ← not yet implemented
-  └── GordonMcBrideSolver  ← reference / validation
+  └── GordonMcBrideSolver  ← recommended default
 ```
 
-**`MajorSpeciesSolver`** (96.5% convergence, 0.013% mean T error vs RocketCEA):
+**`MajorSpeciesSolver`** (95.9% convergence, 0.023% mean T error vs RocketCEA, ~235 ms/case):
 - Inner loop (`_tp_equilibrium`): compressed Newton on major gas species only — matrix is always S×S regardless of species count. Minor species set analytically from element potentials π after each Newton step.
 - Outer loop (`_temperature_search`): Newton + interval-halving to satisfy energy constraint (HP/SP).
 - `_tp_equilibrium` returns a 4-tuple `(mixture, pi, n_iters, converged_bool)`; `_temperature_search` returns a 5-tuple `(mixture, T, pi, n_outer, converged_bool)`. `solve()` uses the returned `converged` flag directly.
 - After each `_tp_equilibrium` call, a "final exact update" applies `nⱼ = n·exp(Aⱼ·π − g°/RT − ln P/P°)` to all gas species (needed for outer-loop bootstrap when the inner loop starts from a flat initial guess), followed by a Newton element-balance correction loop (`A_gas^T diag(n_gas) A_gas · δπ = b₀ − Aᵀ·n`) that restores conservation to machine precision.
 
-**`GordonMcBrideSolver`** (72.9% convergence, 0.82% mean T error — reference/validation):
+**`GordonMcBrideSolver`** (100% convergence, 0.017% mean T error, ~14 ms/case — recommended default):
 - Single Newton loop solving π, Δnc, Δln(n), Δln(T) simultaneously. Matrix size (S+nc+1)² for TP or (S+nc+2)² for HP/SP.
 - Stability fix: tracks `n_var` as the *previous iteration's* `n_gas_total`. This gives `G[idx_n, idx_n] = n_gas_total_current − n_gas_total_prev ≠ 0`, preventing runaway `delta_ln_n` on lean mixtures. `n_var` is stored before `_apply_update`, so the next iteration sees the change. `mu_gas` always uses the actual current `n_gas_total`, not `n_var`.
 

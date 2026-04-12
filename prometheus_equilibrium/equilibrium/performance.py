@@ -126,17 +126,9 @@ class PerformanceSolver:
         self,
         solver: Optional[EquilibriumSolver] = None,
         db=None,
-        sp_entropy_mode: str = "total",
     ):
         self.solver = solver or GordonMcBrideSolver()
         self.db = db  # Optional SpeciesDatabase for condensed phase transitions
-        mode = str(sp_entropy_mode).strip().lower()
-        if mode not in ("total", "total_normalized"):
-            raise ValueError(
-                "sp_entropy_mode must be 'total' or 'total_normalized', "
-                f"got {sp_entropy_mode!r}."
-            )
-        self.sp_entropy_mode = mode
 
     def solve(
         self,
@@ -666,7 +658,6 @@ class PerformanceSolver:
             return self._solve_shifting_sp_mode(
                 chamber,
                 p_target,
-                sp_entropy_mode=self.sp_entropy_mode,
                 guess=guess,
                 log_failure=log_failure,
             )
@@ -678,12 +669,11 @@ class PerformanceSolver:
         self,
         chamber: EquilibriumSolution,
         p_target: float,
-        sp_entropy_mode: str,
         guess: Optional[EquilibriumSolution],
         log_failure: bool,
         t_init_override: Optional[float] = None,
     ) -> EquilibriumSolution:
-        """Solve one shifting SP state at fixed pressure using a specific entropy basis."""
+        """Solve one shifting SP state at fixed pressure."""
         from prometheus_equilibrium.equilibrium.problem import EquilibriumProblem as EP
 
         chamber_mix = chamber.mixture
@@ -697,17 +687,7 @@ class PerformanceSolver:
         # condense them at exit conditions.
         full_products = getattr(self, "_full_products", None) or chamber_mix.species
 
-        if sp_entropy_mode == "total_normalized":
-            species_map = self._build_condensed_entropy_normalization_map(
-                full_products, reference_temperature=298.15
-            )
-            chamber_mix = self._remap_mixture_species(chamber_mix, species_map)
-            if guess_mix is not None:
-                guess_mix = self._remap_mixture_species(guess_mix, species_map)
-            sp_products = [species_map.get(sp, sp) for sp in full_products]
-        else:
-            species_map = {}
-            sp_products = list(full_products)
+        sp_products = list(full_products)
 
         reactant_dict = {
             sp: n for sp, n in zip(chamber_mix.species, chamber_mix.moles) if n > 0
@@ -726,7 +706,6 @@ class PerformanceSolver:
                 if t_init_override is not None
                 else (guess.temperature if guess else chamber.temperature * 0.8)
             ),
-            sp_entropy_mode="total",
         )
         solution = self.solver.solve(
             sp_prob,
@@ -739,13 +718,11 @@ class PerformanceSolver:
                 solution.gamma_s = gs
 
         logger.debug(
-            "SP @P={:.3e} mode={} converged={} T={:.2f}K S_target={:.6e} normalized_condensed={} gamma_s={}",
+            "SP @P={:.3e} converged={} T={:.2f}K S_target={:.6e} gamma_s={}",
             p_target,
-            sp_entropy_mode,
             solution.converged,
             solution.temperature,
             entropy_target,
-            len(species_map),
             solution.gamma_s,
         )
         return solution
@@ -773,7 +750,6 @@ class PerformanceSolver:
             sol = self._solve_shifting_sp_mode(
                 chamber,
                 float(p_step),
-                sp_entropy_mode=self.sp_entropy_mode,
                 guess=last,
                 log_failure=False if idx < (len(pressures) - 1) else log_failure,
             )
@@ -848,7 +824,6 @@ class PerformanceSolver:
             candidate = self._solve_shifting_sp_mode(
                 chamber,
                 p_target,
-                sp_entropy_mode=self.sp_entropy_mode,
                 guess=reference,
                 log_failure=log_failure,
                 t_init_override=seed,
@@ -867,7 +842,6 @@ class PerformanceSolver:
             candidate = self._solve_shifting_sp_mode(
                 chamber,
                 p_target,
-                sp_entropy_mode=self.sp_entropy_mode,
                 guess=frozen_seed,
                 log_failure=log_failure,
                 t_init_override=seed,
@@ -879,36 +853,6 @@ class PerformanceSolver:
                 best = candidate
                 best_score = score
         return best
-
-    def _build_condensed_entropy_normalization_map(
-        self,
-        species,
-        reference_temperature: float,
-    ):
-        """Build a species remap that removes condensed absolute-entropy offsets.
-
-        This normalises each condensed species by setting its entropy to zero at
-        ``reference_temperature`` while preserving Cp(T) and h(T) slopes.
-        """
-        species_map = {}
-        for sp in species:
-            if sp.condensed == 0:
-                continue
-            s_ref = sp.entropy(reference_temperature)
-            if not math.isfinite(s_ref):
-                continue
-            species_map[sp] = CalibratedSpecies(sp, h_offset=0.0, s_offset=-s_ref)
-        return species_map
-
-    @staticmethod
-    def _remap_mixture_species(mix, species_map):
-        """Return a copy of ``mix`` with species replaced via ``species_map``."""
-        from prometheus_equilibrium.equilibrium.mixture import Mixture
-
-        if not species_map:
-            return mix.copy()
-        remapped_species = [species_map.get(sp, sp) for sp in mix.species]
-        return Mixture(remapped_species, mix.moles.copy())
 
     def _apply_phase_transitions(self, mix: "Mixture", T: float) -> "Mixture":
         """Replace condensed species whose thermo data is invalid at *T*.

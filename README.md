@@ -7,33 +7,30 @@ chamber combustion (HP) and isentropic nozzle expansion (SP).
 
 ## Project Status
 
-Pre-1.0 (`v0.1.0`), active development. Core solver infrastructure and all
-thermo-data parsers are complete; the recommended solver is `GordonMcBrideSolver`.
-Expect breaking changes to the API and data formats!
+Pre-1.0 (`v0.1`), active development. Core solver infrastructure, all
+thermo-data parsers, and the desktop GUI are complete. The recommended solver
+is `GordonMcBrideSolver`. Expect breaking changes to the API and data formats
+before 1.0.
 
-## TO-IMPLEMENT Roadmap
+## Roadmap
 
-Nice-to-have items for upcoming releases, grouped by impact area.
+### Core Solver
 
-### Core Solver and Data
-
-- [x] Add structured non-convergence diagnostics to `EquilibriumSolution` (failure reason, residuals, element-balance error, last step norm).
-- [ ] Implement `PEPSolver._tp_equilibrium` and add regression coverage for TP/HP/SP behavior.
-- [ ] Add optional numerical-stability fallback modes for difficult edge cases (adaptive damping / tighter line search controls).
+- [ ] Implement `PEPSolver._tp_equilibrium` (currently raises `NotImplementedError`).
+- [ ] Add optional numerical-stability fallback modes for difficult edge cases.
 - [ ] Add lightweight profiling hooks to report per-iteration timing and major matrix-solve costs.
-- [ ] Investigate if key species from the species database can also be used as propellant ingredients e.g. methane, oxygen
+- [ ] Investigate using species-database entries directly as propellant ingredients (e.g. methane, oxygen).
 
 ### GUI
 
-- [ ] Implement full report export from the GUI (TXT/CSV/JSON) including sweep metadata and final plots.
-- [ ] Add progress + cancel support for long sweep runs in `PerformanceWorker`.
-- [ ] Persist user session settings (units, selected species databases, sweep mode, and recent inputs).
+- [ ] Full report export (TXT / CSV / JSON) including sweep metadata and plots.
+- [ ] Cancel support for long sweep runs in `PerformanceWorker`.
+- [ ] Persist user session settings (units, database selection, sweep mode, recent inputs).
 
 ### CLI and Tooling
 
-- [ ] Add a non-interactive solve CLI for HP/TP/SP runs with machine-readable output (`--json` / `--csv`).
-- [ ] Add benchmark baseline comparison mode in `tests/benchmark.py` with threshold-based pass/fail output for CI.
-- [ ] Add strict non-interactive build options in thermo tooling (`--no-prompt`, `--fail-on-missing-label`) for reproducible automation.
+- [ ] Non-interactive solve CLI for HP/TP/SP runs with machine-readable output (`--json` / `--csv`).
+- [ ] Benchmark baseline mode in `tests/benchmark.py` with threshold-based pass/fail for CI.
 
 ## Features
 
@@ -48,43 +45,43 @@ Nice-to-have items for upcoming releases, grouped by impact area.
 
 **Solvers**
 
-| Solver | Role | Notes                                                                    |
-|---|---|--------------------------------------------------------------------------|
-| `GordonMcBrideSolver` | Production (default) | Fastest in current implementation; matches NASA CEA / RocketCEA algorithm |
-| `MajorSpeciesSolver` | Alternative | S×S Newton, quadratic convergence                                        |
-| `PEPSolver` | Reference | Linear convergence, not recommended, currently unstable solve properties |
+| Solver | Role | Convergence | Mean T error vs RocketCEA | Speed |
+|---|---|---|---|---|
+| `GordonMcBrideSolver` | **Recommended** | 100 % | 0.017 % | ~14 ms/case |
+| `MajorSpeciesSolver` | Alternative | 95.9 % | 0.023 % | ~235 ms/case |
+| `PEPSolver` | Not yet implemented | — | — | — |
 
 **Rocket performance:** frozen and shifting isentropic nozzle expansion with
-c\*, Isp (vacuum and sea-level), and area ratio.
+c\*, Isp (vacuum, sea-level, and actual), and area ratio.
 
-For shifting nozzle expansion, Prometheus supports configurable SP entropy
-bases: full-mixture entropy (default, best ProPEP/CEA parity), gas-only
-entropy, and an auto mode that retries gas-only if full-mixture SP does not
-converge.
+Shifting nozzle expansion uses full-mixture entropy as the SP isentrope
+constraint.
+
+**Desktop GUI** (`prometheus-gui`): PySide6 interface for propellant
+composition, database selection, sweep runs (O/F or Pc), and result
+visualisation including solver convergence plots, nozzle expansion curves, and
+per-station performance charts.
 
 ## Installation
 
-### Install from PyPI (recommended)
+### Install from PyPI
 
 ```bash
-python -m pip install prometheus-equilibrium
-python -m pip install "prometheus-equilibrium[gui]"
+pip install prometheus-equilibrium           # solver + propellant database
+pip install "prometheus-equilibrium[gui]"    # + PySide6 desktop GUI
 ```
 
-### Install from source (development workflow)
+### Install from source (development)
 
-This repository uses [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync --group dev
-pip install -e .
-pip install -e ".[gui]"
+git clone https://github.com/1ckendall/Prometheus
+cd Prometheus
+uv sync          # installs all dependencies including dev tools and GUI
 ```
 
 ## Quick Start
-
-> **Note:** `SpeciesDatabase()` now resolves package-relative thermo data paths
-> automatically. You can still override any source path in the constructor.
 
 ```python
 from prometheus_equilibrium.equilibrium import (
@@ -95,14 +92,14 @@ from prometheus_equilibrium.equilibrium import (
 )
 
 db = SpeciesDatabase()
-db.load(include_nasa9=True, include_nasa7=True, include_terra=True)
+db.load()   # NASA-7, NASA-9, TERRA loaded by default
 
 h2 = db.find("H2", phase="G")
 o2 = db.find("O2", phase="G")
 products = db.get_species({"H", "O"}, max_atoms=6)
 
 T_react = 298.15
-H0 = sum(n * sp.enthalpy(T_react) for sp, n in {h2: 2.0, o2: 1.0}.items())
+H0 = h2.enthalpy(T_react) * 2.0 + o2.enthalpy(T_react) * 1.0
 
 problem = EquilibriumProblem(
     reactants={h2: 2.0, o2: 1.0},
@@ -116,13 +113,8 @@ problem = EquilibriumProblem(
 solution = GordonMcBrideSolver().solve(problem)
 print(solution.summary())
 ```
-Or access the GUI:
 
-```bash
-prometheus-gui
-```
-
-If you are running from source without installing scripts, use:
+Launch the desktop GUI:
 
 ```bash
 uv run prometheus-gui
@@ -133,30 +125,25 @@ For a longer walkthrough, open [`demonstration.ipynb`](demonstration.ipynb).
 ## Propellant Database
 
 Prometheus ships a TOML propellant database covering hundreds of ingredients
-(AP, HTPB, aluminium, MMH, UDMH, N₂O₄, kerosene, and many more) that has been directly
-converted from PROPEP. This database is in active development and may change in the future
-as propellants are added / removed / consolidated.
-`PropellantDatabase.mix()` returns a `PropellantMixture` with the element set,
-reactant moles, and total H₀ pre-computed so you don't need to calculate them
-manually.  Pass the mixture directly to
-`PerformanceSolver.solve_from_mixture()` to get paired frozen and shifting
-results in one call:
+(AP, HTPB, aluminium, MMH, UDMH, N₂O₄, kerosene, and many more) converted
+from PROPEP. `PropellantDatabase.mix()` returns a `PropellantMixture` with the
+element set, reactant moles, and total H₀ pre-computed. Pass the mixture
+directly to `PerformanceSolver.solve_from_mixture()` to get paired frozen and
+shifting results in one call:
 
 ```python
 from prometheus_equilibrium.equilibrium import SpeciesDatabase, PerformanceSolver
 from prometheus_equilibrium.propellants import PropellantDatabase
 
 db = SpeciesDatabase()
-db.load(include_nasa9=True, include_nasa7=True, include_terra=True)
+db.load()
 
-prop_db = PropellantDatabase(
-    "prometheus_equilibrium/propellants/propellants.toml"
-)
+prop_db = PropellantDatabase()
 prop_db.load()
 
-# AP/Al/HTPB composite solid propellant at O/F ≈ 2.74 (68/18/14 by mass)
+# AP/Al/HTPB composite solid propellant (68/18/14 by mass)
 mixture = prop_db.mix([
-    ("AMMONIUM_PERCHLORATE",    0.68),
+    ("AMMONIUM_PERCHLORATE",     0.68),
     ("ALUMINUM_PURE_CRYSTALINE", 0.18),
     ("HTPB_R_45HT",              0.14),
 ])
@@ -173,22 +160,21 @@ print(f"Isp (vac, shifting) = {result.shifting.isp_vac:.1f} m/s")
 print(f"Isp (vac, frozen)   = {result.frozen.isp_vac:.1f} m/s")
 ```
 
-The `mix()` call accepts amounts in any consistent mass unit — only the ratios
-matter.  For liquid bipropellants simply name the two ingredients:
+For liquid bipropellants:
 
 ```python
 mixture = prop_db.mix([("HYDRAZINE", 1.0), ("NITROGEN_TETROXIDE_LIQ", 1.33)])
 ```
 
-Use `prop_db.ingredient_ids` and `prop_db.formulation_ids` to browse what is
-available.  Named formulations stored in the TOML can be loaded with
-`prop_db.expand("formulation_id")` instead of `mix()`.
+Use `prop_db.ingredient_ids` and `prop_db.formulation_ids` to browse available
+ingredients. Named formulations stored in the TOML can be loaded with
+`prop_db.expand("formulation_id")`.
 
 ## Documentation
 
 Online: https://prometheus-equilibrium.readthedocs.io/en/latest/
 
-Build the Sphinx docs locally:
+Build locally:
 
 ```bash
 uv run --group docs sphinx-build -b html docs docs/_build/html
@@ -205,13 +191,12 @@ The docs include:
 ## Development
 
 ```bash
-uv sync --group dev            # Install dev extras (pytest, black, rocketcea …)
-uv run pytest                  # Run the test suite
-uv run python tests/benchmark.py  # Benchmark 170 cases vs RocketCEA
-uv run black prometheus_equilibrium tests
-uv run isort prometheus_equilibrium tests
-uv run prometheus-build-all-thermo   # Re-generate all thermo databases
-uv run prometheus-build-legacy all   # Re-generate TERRA + AFCESIC from binaries
+uv sync                              # install everything (dev tools, GUI deps, test deps)
+uv run pytest                        # run the test suite
+uv run pytest -m "not integration"   # fast suite (no RocketCEA required)
+uv run python tests/benchmark.py     # benchmark 170 cases vs RocketCEA
+uv run prometheus-build-all-thermo   # re-generate all compiled thermo databases
+uv run prometheus-build-legacy all   # re-generate TERRA + AFCESIC from binaries
 ```
 
 ## Package Layout
@@ -235,26 +220,26 @@ prometheus_equilibrium/
 
 ## Validation
 
-Prometheus has been developed by cross-referencing multiple existing solver implementations:
+Prometheus is cross-referenced against multiple existing solver implementations:
 
 - [NASA CEA](https://github.com/nasa/cea)
 - [PyProPEP / cpropep](https://github.com/jonnydyer/pypropep)
 - [pep-for-zos](https://github.com/haynieresearch/pep-for-zos)
 
-The `tests/benchmark.py` script runs 170 cases (H₂/O₂, CH₄/O₂, N₂H₄/N₂O₄,
-NH₃/O₂ across 11 O/F ratios × 5 pressures) and reports temperature, molar
-mass, γ, Cₚ, and speed-of-sound error against RocketCEA.
+`tests/benchmark.py` runs 170 cases (H₂/O₂, CH₄/O₂, N₂H₄/N₂O₄, NH₃/O₂
+across 11 O/F ratios × 5 pressures) and reports temperature, molar mass, γ,
+Cₚ, and speed-of-sound error against RocketCEA.
 
 ## Contributing
 
-- Open an issue first when possible to discuss the change.
+- Open an issue first to discuss the change.
 - Add or update tests for any behaviour change.
 - Keep docstrings in Google style (`Args:`, `Returns:`, etc.).
-- Install the pre-commit hooks after cloning so that black and isort run
-  automatically on every commit:
+- Pre-commit hooks (black + isort) run automatically on every commit after
+  the one-time setup:
 
 ```bash
-uv sync --group dev
+uv sync
 uv run pre-commit install
 ```
 
