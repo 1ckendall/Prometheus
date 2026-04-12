@@ -11,6 +11,12 @@ _NO_HISTORY_MSG = (
     "convergence plots."
 )
 
+_DEFAULT_RESULTS_REPORT_TEXT = (
+    "=== Rocket Performance Report ===\n\n"
+    "Run a calculation to populate shared chamber state,\n"
+    "frozen/shifting exit comparison, and performance tables."
+)
+
 
 class AnalysisPage(QWidget):
     def __init__(self, main_window):
@@ -95,12 +101,27 @@ class AnalysisPage(QWidget):
         self.results_text = QTextEdit()
         self.results_text.setReadOnly(True)
         self.results_text.setFontFamily("Courier")
-        self.results_text.setText(
-            "=== Rocket Performance Report ===\n\n"
-            "Run a calculation to populate shared chamber state,\n"
-            "frozen/shifting exit comparison, and performance tables."
-        )
+        self.results_text.setText(_DEFAULT_RESULTS_REPORT_TEXT)
         layout.addWidget(self.results_text)
+
+    def reset_results_view(self) -> None:
+        """Clear report text and plots after composition or input changes."""
+        self.results_text.setText(_DEFAULT_RESULTS_REPORT_TEXT)
+        placeholder = "Results cleared.\nRun a new calculation."
+        canvases = (
+            self.canvas_concentration,
+            self.canvas_temperature_conv,
+            self.canvas_exp_temp,
+            self.canvas_exp_mach,
+            self.canvas_exp_mw,
+            self.canvas_exp_gamma,
+            self.canvas_isp,
+            self.canvas_cstar,
+            self.canvas_tc,
+            self.canvas_expansion,
+        )
+        for canvas in canvases:
+            self._placeholder(canvas, placeholder)
 
     # ------------------------------------------------------------------ helpers
 

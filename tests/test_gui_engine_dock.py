@@ -36,6 +36,7 @@ class _DummyResultsText:
 class _DummyAnalysisPage:
     def __init__(self):
         self.results_text = _DummyResultsText()
+        self.reset_called = False
 
     def update_convergence_plots(self, *_args, **_kwargs):
         pass
@@ -45,6 +46,10 @@ class _DummyAnalysisPage:
 
     def update_performance_plots(self, *_args, **_kwargs):
         pass
+
+    def reset_results_view(self):
+        self.reset_called = True
+        self.results_text.setText("reset")
 
 
 class _DummyLibraryPage:
@@ -237,3 +242,68 @@ def test_report_refresh_updates_units_after_calculation(dock):
     text_us = dock.main_window.page_analysis.results_text.toPlainText()
     assert "Temperature Unit: F" in text_us
     assert "Pressure Unit: PSI" in text_us
+
+
+def test_clear_previous_results_resets_labels_report_and_payload(dock):
+    payload = {
+        "ok": True,
+        "cases": [(None, _DummyPerfComparison())],
+        "sweep_axis": "none",
+        "sweep_label": "Run Index",
+    }
+    dock.on_perf_finished(payload)
+    assert dock._last_report_payload is not None
+
+    dock.clear_previous_results()
+
+    assert dock.res_isp.text() == "---"
+    assert dock.res_isp_frozen.text() == "---"
+    assert dock.res_cstar.text() == "---"
+    assert dock.res_cstar_frozen.text() == "---"
+    assert dock.res_tc.text() == "---"
+    assert dock.res_tc_frozen.text() == "---"
+    assert dock._last_report_payload is None
+    assert dock.main_window.page_analysis.reset_called
+    assert "Results cleared" in dock.main_window.statusBar().currentMessage()
+
+
+def test_clear_previous_results_without_existing_output_is_silent(dock):
+    dock.main_window.statusBar().showMessage("baseline", 1000)
+
+    dock.clear_previous_results()
+
+    assert dock.main_window.statusBar().currentMessage() == "baseline"
+
+
+def test_engine_condition_editing_invalidates_previous_results(dock):
+    payload = {
+        "ok": True,
+        "cases": [(None, _DummyPerfComparison())],
+        "sweep_axis": "none",
+        "sweep_label": "Run Index",
+    }
+    dock.on_perf_finished(payload)
+    assert dock._last_report_payload is not None
+
+    dock.input_pc.setText("7.100000")
+    dock.input_pc.editingFinished.emit()
+
+    assert dock._last_report_payload is None
+    assert dock.res_isp.text() == "---"
+    assert dock.main_window.page_analysis.reset_called
+
+
+def test_engine_mode_toggle_invalidates_previous_results(dock):
+    payload = {
+        "ok": True,
+        "cases": [(None, _DummyPerfComparison())],
+        "sweep_axis": "none",
+        "sweep_label": "Run Index",
+    }
+    dock.on_perf_finished(payload)
+    assert dock._last_report_payload is not None
+
+    dock.spec_combo.setCurrentText("Area Ratio (Ae/At)")
+
+    assert dock._last_report_payload is None
+    assert dock.res_cstar.text() == "---"

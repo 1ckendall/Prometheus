@@ -379,6 +379,40 @@ class EngineDock(QDockWidget):
         self.solver = self._make_solver()
         self.worker = None
         self._last_report_payload = None
+        self._connect_result_invalidation_signals()
+
+    def _connect_result_invalidation_signals(self) -> None:
+        """Clear stale outputs when run-defining engine settings are edited."""
+        for widget in (
+            self.input_pc,
+            self.input_pc_min,
+            self.input_pc_max,
+            self.input_pc_steps,
+            self.input_exp,
+            self.input_ambient,
+        ):
+            widget.editingFinished.connect(self.clear_previous_results)
+
+        self.pc_mode_combo.currentTextChanged.connect(
+            lambda _text: self.clear_previous_results()
+        )
+        self.spec_combo.currentTextChanged.connect(
+            lambda _text: self.clear_previous_results()
+        )
+        self.check_nozzle_profile.stateChanged.connect(
+            lambda _state: self.clear_previous_results()
+        )
+        self.spin_max_atoms.valueChanged.connect(
+            lambda _value: self.clear_previous_results()
+        )
+        for cb in (
+            self.check_nasa7,
+            self.check_nasa9,
+            self.check_janaf,
+            self.check_afcesic,
+            self.check_terra,
+        ):
+            cb.stateChanged.connect(lambda _state: self.clear_previous_results())
 
     def _make_solver(self):
         """Construct the equilibrium solver matching the current dock settings."""
@@ -398,6 +432,7 @@ class EngineDock(QDockWidget):
 
     def _on_solver_changed(self, _index: int) -> None:
         self.solver = self._make_solver()
+        self.clear_previous_results()
 
     def _max_atoms(self) -> int:
         """Return the max_atoms limit from the dock spinbox."""
@@ -698,6 +733,46 @@ class EngineDock(QDockWidget):
         elif report_type == "equilibrium":
             self.main_window.page_analysis.results_text.setText(
                 self._build_equilibrium_report_text(payload["solution"])
+            )
+
+    def clear_previous_results(self) -> None:
+        """Clear displayed outputs so stale results are not shown after input changes."""
+        had_previous_results = self._last_report_payload is not None or any(
+            label.text() != "---"
+            for label in (
+                self.res_isp,
+                self.res_isp_frozen,
+                self.res_cstar,
+                self.res_cstar_frozen,
+                self.res_tc,
+                self.res_tc_frozen,
+            )
+        )
+
+        self._last_report_payload = None
+        self.res_isp.setText("---")
+        self.res_isp_frozen.setText("---")
+        self.res_cstar.setText("---")
+        self.res_cstar_frozen.setText("---")
+        self.res_tc.setText("---")
+        self.res_tc_frozen.setText("---")
+
+        analysis = getattr(self.main_window, "page_analysis", None)
+        if analysis is None:
+            return
+        if hasattr(analysis, "reset_results_view"):
+            analysis.reset_results_view()
+        elif hasattr(analysis, "results_text"):
+            analysis.results_text.setText(
+                "=== Rocket Performance Report ===\n\n"
+                "Run a calculation to populate shared chamber state,\n"
+                "frozen/shifting exit comparison, and performance tables."
+            )
+
+        if had_previous_results and self.main_window.statusBar() is not None:
+            self.main_window.statusBar().showMessage(
+                "Results cleared: inputs changed. Run Calculate to refresh.",
+                3000,
             )
 
     def _render_error_report(self, title: str, message: str, tb: str = "") -> None:

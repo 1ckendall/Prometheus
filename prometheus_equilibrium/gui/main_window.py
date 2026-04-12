@@ -195,6 +195,7 @@ class ProPepUI(QMainWindow):
             with open(file_name, "r", encoding="utf-8") as f:
                 payload = json.load(f)
             self.page_simulator.apply_composition_snapshot(payload)
+            self.engine_dock.clear_previous_results()
             self._focus_simulator(self.page_simulator.current_mode_tab_index())
             self.statusBar().showMessage(
                 f"Loaded composition: {Path(file_name).name}",

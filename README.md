@@ -54,6 +54,12 @@ before 1.0.
 **Rocket performance:** frozen and shifting isentropic nozzle expansion with
 c\*, Isp (vacuum, sea-level, and actual), and area ratio.
 
+Note: ``c*`` is currently computed from the converged throat state, while
+``Isp`` is computed mainly from chamber-to-exit energy/pressure terms. In
+shifting mode, two solvers can therefore report nearly identical ``Isp`` but
+slightly different ``c*`` if their throat SP root converges to slightly
+different states.
+
 Shifting nozzle expansion uses full-mixture entropy as the SP isentrope
 constraint.
 

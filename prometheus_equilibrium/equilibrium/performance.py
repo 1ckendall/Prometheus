@@ -143,6 +143,15 @@ class PerformanceSolver:
 
         Set ``compute_profile=False`` to skip intermediate expansion states and
         avoid extra SP/frozen solves when profiling or batch-sweeping cases.
+
+        Note:
+            ``cstar`` is computed from the converged throat state
+            (``chamber.characteristic_velocity(throat)``), so in shifting mode it
+            can show small solver-to-solver differences when the throat Mach-root
+            solve lands on slightly different SP states. The current ``Isp``
+            implementation is primarily chamber-to-exit based (enthalpy drop plus
+            exit pressure thrust), so matching ``Isp`` does not guarantee identical
+            throat-derived ``cstar``.
         """
         if pe_pa is None and area_ratio is None:
             raise ValueError("Must specify either exit pressure or area ratio.")
@@ -182,6 +191,9 @@ class PerformanceSolver:
             )
 
         # 4. Metrics
+        # c* is throat-derived; Isp is computed from chamber/exit terms in
+        # EquilibriumSolution.specific_impulse, so these can show different
+        # cross-solver sensitivity in shifting mode.
         cstar = chamber.characteristic_velocity(throat)
         isp_actual = chamber.specific_impulse(
             throat, exit_sol, ambient_pressure=ambient_pressure

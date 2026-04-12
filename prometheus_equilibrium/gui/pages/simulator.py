@@ -25,6 +25,7 @@ class SimulatorPage(QWidget):
         super().__init__()
         self.main_window = main_window
         self.prop_db = prop_db
+        self._suspend_formulation_notifications = True
         self.database_items = self.prop_db.ingredient_ids
 
         # Build {id -> display_name} map for combo population.
@@ -72,8 +73,20 @@ class SimulatorPage(QWidget):
 
         self.setup_bipropellant_tab()
         self.setup_formulation_tab()
+        self.sim_tabs.currentChanged.connect(
+            lambda _idx: self._notify_formulation_changed()
+        )
 
         layout.addWidget(self.sim_tabs)
+        self._suspend_formulation_notifications = False
+
+    def _notify_formulation_changed(self) -> None:
+        """Clear stale outputs when the formulation inputs are edited."""
+        if self._suspend_formulation_notifications:
+            return
+        engine_dock = getattr(self.main_window, "engine_dock", None)
+        if engine_dock is not None and hasattr(engine_dock, "clear_previous_results"):
+            engine_dock.clear_previous_results()
 
     def setup_bipropellant_tab(self):
         main_layout = QVBoxLayout(self.tab_biprop)
@@ -132,6 +145,12 @@ class SimulatorPage(QWidget):
         self.input_of_ratio.valueChanged.connect(
             lambda _: self._update_biprop_combined_density()
         )
+        self.input_of_ratio.valueChanged.connect(
+            lambda _: self._notify_formulation_changed()
+        )
+        self.input_of_min.editingFinished.connect(self._notify_formulation_changed)
+        self.input_of_max.editingFinished.connect(self._notify_formulation_changed)
+        self.input_of_steps.editingFinished.connect(self._notify_formulation_changed)
         form_of.addRow("Analysis Mode:", self.of_mode_combo)
         form_of.addRow("Nominal O/F Ratio:", self.input_of_ratio)
         form_of.addRow("O/F Bounds:", of_sweep_layout)
@@ -159,6 +178,7 @@ class SimulatorPage(QWidget):
                 engine.pc_mode_combo.setCurrentText("Single Value")
                 engine.pc_mode_combo.blockSignals(False)
                 engine.handle_pc_mode("Single Value")
+        self._notify_formulation_changed()
 
     def _build_biprop_table(self, parent_layout, title, add_func, norm_func):
         group = QGroupBox(title)
@@ -363,9 +383,11 @@ class SimulatorPage(QWidget):
         self._update_biprop_totals(
             self.fuel_table, self.fuel_tot, self.fuel_density_lbl
         )
+        self._notify_formulation_changed()
 
     def update_ox_totals(self):
         self._update_biprop_totals(self.ox_table, self.ox_tot, self.ox_density_lbl)
+        self._notify_formulation_changed()
 
     def normalize_fuel(self):
         self._norm_biprop(self.fuel_table, self.update_fuel_totals)
@@ -486,6 +508,7 @@ class SimulatorPage(QWidget):
         self.solid_density_lbl.setText(
             f"ρ: {rho / 1000:.3f} g/cc" if rho is not None else "ρ: N/A"
         )
+        self._notify_formulation_changed()
 
     def normalize_solid(self):
         total = float(self.solid_total_display.text())
@@ -567,62 +590,68 @@ class SimulatorPage(QWidget):
         Raises:
             ValueError: If payload is missing required keys or has invalid mode.
         """
-        if not isinstance(payload, dict):
-            raise ValueError("Composition file must be a JSON object.")
+        self._suspend_formulation_notifications = True
+        try:
+            if not isinstance(payload, dict):
+                raise ValueError("Composition file must be a JSON object.")
 
-        propellant_type = payload.get("propellant_type")
-        if propellant_type not in ("bipropellant", "solid"):
-            raise ValueError(
-                "Composition propellant_type must be 'bipropellant' or 'solid'."
-            )
+            propellant_type = payload.get("propellant_type")
+            if propellant_type not in ("bipropellant", "solid"):
+                raise ValueError(
+                    "Composition propellant_type must be 'bipropellant' or 'solid'."
+                )
 
-        if propellant_type == "bipropellant":
+            if propellant_type == "bipropellant":
+                components = payload.get("components")
+                of_ratio = payload.get("of_ratio")
+
+                if not isinstance(components, dict):
+                    raise ValueError(
+                        "Missing 'components' section for bipropellant file."
+                    )
+
+                self._load_rows(
+                    self.fuel_table, self.add_fuel_row, components.get("fuel", [])
+                )
+                self._load_rows(
+                    self.ox_table, self.add_ox_row, components.get("oxidizer", [])
+                )
+                if self.fuel_table.rowCount() == 0:
+                    self.add_fuel_row("", "0.0")
+                if self.ox_table.rowCount() == 0:
+                    self.add_ox_row("", "0.0")
+
+                sweep = of_ratio.get("sweep", {}) if isinstance(of_ratio, dict) else {}
+                mode_text = "Single Value"
+                ratio_value = 2.5
+                of_min = "1.00"
+                of_max = "6.00"
+                of_steps = "11"
+                if isinstance(of_ratio, dict):
+                    mode_text = str(of_ratio.get("mode", "Single Value"))
+                    ratio_value = float(of_ratio.get("value", 2.5))
+                    of_min = str(sweep.get("min", "1.00"))
+                    of_max = str(sweep.get("max", "6.00"))
+                    of_steps = str(sweep.get("steps", "11"))
+
+                self.of_mode_combo.setCurrentText(mode_text)
+                self.input_of_ratio.setValue(ratio_value)
+                self.input_of_min.setText(of_min)
+                self.input_of_max.setText(of_max)
+                self.input_of_steps.setText(of_steps)
+                self.handle_of_mode(self.of_mode_combo.currentText())
+                self.sim_tabs.setCurrentIndex(0)
+                self.update_fuel_totals()
+                self.update_ox_totals()
+                return
+
             components = payload.get("components")
-            of_ratio = payload.get("of_ratio")
-
-            if not isinstance(components, dict):
-                raise ValueError("Missing 'components' section for bipropellant file.")
-
-            self._load_rows(
-                self.fuel_table, self.add_fuel_row, components.get("fuel", [])
-            )
-            self._load_rows(
-                self.ox_table, self.add_ox_row, components.get("oxidizer", [])
-            )
-            if self.fuel_table.rowCount() == 0:
-                self.add_fuel_row("", "0.0")
-            if self.ox_table.rowCount() == 0:
-                self.add_ox_row("", "0.0")
-
-            sweep = of_ratio.get("sweep", {}) if isinstance(of_ratio, dict) else {}
-            mode_text = "Single Value"
-            ratio_value = 2.5
-            of_min = "1.00"
-            of_max = "6.00"
-            of_steps = "11"
-            if isinstance(of_ratio, dict):
-                mode_text = str(of_ratio.get("mode", "Single Value"))
-                ratio_value = float(of_ratio.get("value", 2.5))
-                of_min = str(sweep.get("min", "1.00"))
-                of_max = str(sweep.get("max", "6.00"))
-                of_steps = str(sweep.get("steps", "11"))
-
-            self.of_mode_combo.setCurrentText(mode_text)
-            self.input_of_ratio.setValue(ratio_value)
-            self.input_of_min.setText(of_min)
-            self.input_of_max.setText(of_max)
-            self.input_of_steps.setText(of_steps)
-            self.handle_of_mode(self.of_mode_combo.currentText())
-            self.sim_tabs.setCurrentIndex(0)
-            self.update_fuel_totals()
-            self.update_ox_totals()
-            return
-
-        components = payload.get("components")
-        if not isinstance(components, list):
-            raise ValueError("Missing 'components' list for solid propellant file.")
-        self._load_rows(self.solid_table, self.add_solid_row, components)
-        if self.solid_table.rowCount() == 0:
-            self.add_solid_row("", "0.0")
-        self.sim_tabs.setCurrentIndex(1)
-        self.update_solid_totals()
+            if not isinstance(components, list):
+                raise ValueError("Missing 'components' list for solid propellant file.")
+            self._load_rows(self.solid_table, self.add_solid_row, components)
+            if self.solid_table.rowCount() == 0:
+                self.add_solid_row("", "0.0")
+            self.sim_tabs.setCurrentIndex(1)
+            self.update_solid_totals()
+        finally:
+            self._suspend_formulation_notifications = False

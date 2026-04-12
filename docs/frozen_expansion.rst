@@ -350,6 +350,14 @@ with no fallback to gas-only entropy.  The calibrated condensed thermo ensures
 that the SP Newton iteration can evaluate condensed entropy within its valid
 range throughout the expansion.
 
+.. note::
+
+   In the current performance implementation, ``c*`` is computed from the
+   converged throat state, while ``Isp`` is computed primarily from
+   chamber-to-exit enthalpy drop and exit pressure thrust.  As a result,
+   shifting runs can show small solver-to-solver differences in ``c*`` even
+   when ``Isp`` values are effectively identical.
+
 A second database-independence issue affects the shifting solver.  The chamber
 HP equilibrium is solved at ~3300 K, so the Gordon-McBride solver's
 ``_refresh_thermo_species_set`` excludes species with invalid thermo data at

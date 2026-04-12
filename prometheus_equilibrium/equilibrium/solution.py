@@ -299,6 +299,12 @@ class EquilibriumSolution:
 
         Returns:
             Characteristic velocity c* in m/s.
+
+        Note:
+            This implementation is explicitly throat-state based. For shifting
+            expansion, small differences in throat SP convergence between
+            algorithms can appear as small ``c*`` differences even when chamber
+            and exit properties are very close.
         """
         g = throat.isentropic_gamma
         gamma_factor = math.sqrt(g) * (2 / (g + 1)) ** ((g + 1) / (2 * (g - 1)))
@@ -329,6 +335,12 @@ class EquilibriumSolution:
 
         Returns:
             Specific impulse in seconds (referenced to standard g₀ = 9.80665 m/s²).
+
+        Note:
+            In the current implementation, the numerical value comes from
+            chamber-to-exit terms (enthalpy drop and exit pressure thrust).
+            The ``throat`` argument is accepted for API symmetry with other
+            performance relations but is not used directly in the formula.
         """
         g0 = 9.80665  # m/s²
 
