@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from prometheus_equilibrium.gui.engine import EngineDock
 from prometheus_equilibrium.gui.pages.analysis import AnalysisPage
 from prometheus_equilibrium.gui.pages.library import LibraryPage
+from prometheus_equilibrium.gui.pages.optimizer import OptimizerPage
 from prometheus_equilibrium.gui.pages.simulator import SimulatorPage
 
 
@@ -47,6 +48,7 @@ class ProPepUI(QMainWindow):
         self.nav_rail.setObjectName("NavRail")
         self.nav_rail.setIconSize(QSize(32, 32))
         self.nav_rail.addItem("Simulator")
+        self.nav_rail.addItem("Optimizer")
         self.nav_rail.addItem("Analysis")
         self.nav_rail.addItem("Library")
         for i in range(self.nav_rail.count()):
@@ -67,10 +69,12 @@ class ProPepUI(QMainWindow):
 
         # 4. Pages
         self.page_simulator = SimulatorPage(self, self.prop_db)
+        self.page_optimizer = OptimizerPage(self, self.prop_db)
         self.page_analysis = AnalysisPage(self)
         self.page_library = LibraryPage(self, self.prop_db, self.spec_db)
 
         self.content_stack.addWidget(self.page_simulator)
+        self.content_stack.addWidget(self.page_optimizer)
         self.content_stack.addWidget(self.page_analysis)
         self.content_stack.addWidget(self.page_library)
 

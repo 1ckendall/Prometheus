@@ -749,7 +749,6 @@ class EngineDock(QDockWidget):
             )
         )
 
-        self._last_report_payload = None
         self.res_isp.setText("---")
         self.res_isp_frozen.setText("---")
         self.res_cstar.setText("---")
@@ -769,6 +768,7 @@ class EngineDock(QDockWidget):
                 "frozen/shifting exit comparison, and performance tables."
             )
 
+        self._last_report_payload = None
         if had_previous_results and self.main_window.statusBar() is not None:
             self.main_window.statusBar().showMessage(
                 "Results cleared: inputs changed. Run Calculate to refresh.",
