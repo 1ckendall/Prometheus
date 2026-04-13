@@ -53,9 +53,12 @@ def page(qapp):
 def test_load_from_simulator_adds_group_label_column_entries(page):
     page.load_from_simulator()
 
-    assert page.table_vars.columnCount() == 4
+    assert page.table_vars.columnCount() == 5
     assert page.table_vars.rowCount() == 3
-    assert page.table_vars.item(0, 3).text() == ""
+    # Column 3 is the Pinned checkbox widget, not a QTableWidgetItem
+    assert page.table_vars.item(0, 3) is None
+    # Column 4 is Group Labels — empty by default after preload
+    assert page.table_vars.item(0, 4).text() == ""
     assert page.combo_closure.currentData() is not None
 
 

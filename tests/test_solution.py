@@ -422,6 +422,58 @@ def test_specific_impulse_pressure_thrust_path():
     assert isp_vac >= isp_sl
 
 
+def _make_solution_from_scale(
+    species: Species,
+    scale: float,
+    temperature: float,
+    pressure: float,
+) -> EquilibriumSolution:
+    """Build a minimal converged solution with one gas species and scaled moles."""
+    moles = np.array([scale], dtype=float)
+    z = np.zeros(1)
+    return EquilibriumSolution(
+        mixture=Mixture([species], moles),
+        temperature=temperature,
+        pressure=pressure,
+        converged=True,
+        iterations=0,
+        residuals=z,
+        lagrange_multipliers=z,
+    )
+
+
+def test_specific_impulse_invariant_to_mole_scale_no_pressure_thrust():
+    """Isp should be unchanged by uniform scaling when pressure thrust is zero."""
+    sp = _Gas({"X": 1}, g0=1.0, h0=4.0, molar_mass_kg=0.002)
+
+    chamber_1 = _make_solution_from_scale(sp, 1.0, temperature=3500.0, pressure=7e6)
+    exit_1 = _make_solution_from_scale(sp, 1.0, temperature=2000.0, pressure=P_REF)
+
+    chamber_10 = _make_solution_from_scale(sp, 10.0, temperature=3500.0, pressure=7e6)
+    exit_10 = _make_solution_from_scale(sp, 10.0, temperature=2000.0, pressure=P_REF)
+
+    isp_1 = chamber_1.specific_impulse(chamber_1, exit_1, ambient_pressure=P_REF)
+    isp_10 = chamber_10.specific_impulse(chamber_10, exit_10, ambient_pressure=P_REF)
+
+    assert isp_10 == pytest.approx(isp_1, rel=1e-12)
+
+
+def test_specific_impulse_invariant_to_mole_scale_with_pressure_thrust():
+    """Isp should stay scale-invariant even when pressure-thrust term is active."""
+    sp = _Gas({"X": 1}, g0=1.0, h0=4.0, molar_mass_kg=0.002)
+
+    chamber_1 = _make_solution_from_scale(sp, 1.0, temperature=3500.0, pressure=7e6)
+    exit_1 = _make_solution_from_scale(sp, 1.0, temperature=2000.0, pressure=2.0e5)
+
+    chamber_10 = _make_solution_from_scale(sp, 10.0, temperature=3500.0, pressure=7e6)
+    exit_10 = _make_solution_from_scale(sp, 10.0, temperature=2000.0, pressure=2.0e5)
+
+    isp_1 = chamber_1.specific_impulse(chamber_1, exit_1, ambient_pressure=0.0)
+    isp_10 = chamber_10.specific_impulse(chamber_10, exit_10, ambient_pressure=0.0)
+
+    assert isp_10 == pytest.approx(isp_1, rel=1e-12)
+
+
 # ---------------------------------------------------------------------------
 # 9. Diagnostics fields on EquilibriumSolution
 # ---------------------------------------------------------------------------

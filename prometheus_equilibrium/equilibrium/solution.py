@@ -310,6 +310,14 @@ class EquilibriumSolution:
         gamma_factor = math.sqrt(g) * (2 / (g + 1)) ** ((g + 1) / (2 * (g - 1)))
         return throat.speed_of_sound / gamma_factor
 
+    @property
+    def specific_enthalpy(self) -> float:
+        """Mass-specific mixture enthalpy h = H_total / m_total [J/kg]."""
+        total_mass = self.mixture.total_mass
+        if total_mass <= 0.0:
+            return 0.0
+        return self.total_enthalpy / total_mass
+
     def specific_impulse(
         self,
         throat: "EquilibriumSolution",
@@ -344,10 +352,10 @@ class EquilibriumSolution:
         """
         g0 = 9.80665  # m/s²
 
-        # Enthalpy drop on a mass basis [J/kg]
-        # self.total_enthalpy returns J (extensive)
-        # Mixtures in solutions derived from PropellantDatabase always represent 1 kg.
-        dh_j_kg = self.total_enthalpy - exit.total_enthalpy
+        # Enthalpy drop on a mass basis [J/kg].
+        # Use explicit mass-normalized enthalpies so Isp is invariant to
+        # arbitrary scaling of mixture moles.
+        dh_j_kg = self.specific_enthalpy - exit.specific_enthalpy
 
         if dh_j_kg <= 0:
             v_exit = 0.0

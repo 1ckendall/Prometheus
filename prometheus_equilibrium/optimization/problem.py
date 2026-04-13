@@ -190,6 +190,12 @@ class OptimizationProblem:
                 raise ValueError(
                     f"Sum group {grp.group_id!r} exact total is outside configured bounds."
                 )
+            if high > self.total_mass_fraction + 1e-9:
+                raise ValueError(
+                    f"Sum group {grp.group_id!r} maximum_total ({high:.6g}) exceeds "
+                    f"total_mass_fraction ({self.total_mass_fraction:.6g}). "
+                    "Check that values are fractions (0–1), not percentages."
+                )
 
         if self.total_mass_fraction <= 0.0:
             raise ValueError("total_mass_fraction must be > 0.")
@@ -201,6 +207,16 @@ class OptimizationProblem:
             raise ValueError(
                 "closure_ingredient_id must reference a defined variable bound ingredient."
             )
+
+        if self.closure_ingredient_id is not None:
+            for grp in self.sum_to_total_groups:
+                if self.closure_ingredient_id in grp.members:
+                    raise ValueError(
+                        f"Closure ingredient {self.closure_ingredient_id!r} is a member "
+                        f"of sum group {grp.group_id!r}. The closure always overrides "
+                        "sum-group assignments, making the group constraint unreliable. "
+                        "Remove the closure from the group, or choose a different closure."
+                    )
 
         objective_ingredient_ids = {v.ingredient_id for v in self.variables}
         for grp in self.fixed_proportion_groups:

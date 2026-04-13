@@ -136,7 +136,10 @@ class FormulationConstraintCompiler:
                 f"Fixed group {group.group_id!r} has no feasible scale range."
             )
 
-        g_val = trial.suggest_float(f"g:{group.group_id}", g_low, g_high)
+        if abs(g_high - g_low) <= 1e-12:
+            g_val = (g_low + g_high) / 2.0
+        else:
+            g_val = trial.suggest_float(f"g:{group.group_id}", g_low, g_high)
         for member, alpha in zip(group.members, alphas):
             composition[member] = alpha * g_val
 
@@ -205,7 +208,10 @@ class FormulationConstraintCompiler:
                     f"Sum group {group.group_id!r} has no feasible interval for {member!r}."
                 )
 
-            val = trial.suggest_float(f"s:{group.group_id}:{member}", low, high)
+            if abs(high - low) <= 1e-12:
+                val = (low + high) / 2.0
+            else:
+                val = trial.suggest_float(f"s:{group.group_id}:{member}", low, high)
             composition[member] = val
             residual -= val
 
@@ -263,7 +269,10 @@ class FormulationConstraintCompiler:
                     f"(tightened to [{low:.6g}, {high:.6g}])."
                 )
 
-            val = trial.suggest_float(f"x:{ingredient_id}", low, high)
+            if abs(high - low) <= 1e-12:
+                val = (low + high) / 2.0  # pinned / degenerate interval
+            else:
+                val = trial.suggest_float(f"x:{ingredient_id}", low, high)
             composition[ingredient_id] = val
             residual -= val
 

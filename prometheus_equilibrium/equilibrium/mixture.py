@@ -161,6 +161,17 @@ class Mixture:
         return float(self._moles.sum())
 
     @property
+    def total_mass(self) -> float:
+        """Total mixture mass m = Σⱼ nⱼ·Mⱼ [kg]."""
+        return float(
+            sum(
+                n_i * sp.molar_mass()
+                for sp, n_i in zip(self._species, self._moles)
+                if n_i > 0.0
+            )
+        )
+
+    @property
     def total_gas_moles(self) -> float:
         """Total gas-phase moles n_gas = Σⱼ∈gas nⱼ."""
         return float(self.gas_moles().sum())

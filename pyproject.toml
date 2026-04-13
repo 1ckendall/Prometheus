@@ -65,6 +65,7 @@ prometheus-build-all-thermo = "prometheus_equilibrium.tools.build_all_thermo:mai
 prometheus-build-legacy = "prometheus_equilibrium.tools.build_legacy_thermo:main"
 prometheus-build-propellants = "prometheus_equilibrium.tools.build_propellants:main"
 prometheus-gui = "prometheus_equilibrium.gui.app:main"
+prometheus-optimize = "prometheus_equilibrium.tools.run_optimizer:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
