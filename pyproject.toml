@@ -31,9 +31,6 @@ gui = [
     "pyside6>=6.6",
     "matplotlib>=3.7",
 ]
-optimizer = [
-    "optuna>=3.0",
-]
 
 [project.urls]
 Documentation = "https://prometheus-equilibrium.readthedocs.io/en/latest/"
@@ -47,12 +44,12 @@ dev = [
     "isort>=5.0",
     "matplotlib>=3.7",
     "pre-commit>=3.0",
-    "optuna>=3.0",
     "pyinstrument>=4.0",
     "pyside6>=6.6",
     "pytest>=8.0",
     "rocketcea>=1.2",
     "pytest-cov>=7.1.0",
+    "cmaes>=0.13.0",
 ]
 docs = [
     "sphinx>=7.0",

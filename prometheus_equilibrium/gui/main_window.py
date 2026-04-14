@@ -20,7 +20,7 @@ from prometheus_equilibrium.gui.pages.optimizer import OptimizerPage
 from prometheus_equilibrium.gui.pages.simulator import SimulatorPage
 
 
-class ProPepUI(QMainWindow):
+class PrometheusGUI(QMainWindow):
     def __init__(self, prop_db, spec_db):
         super().__init__()
         self.setWindowTitle("Prometheus | Modern Equilibrium Dashboard")
@@ -78,6 +78,13 @@ class ProPepUI(QMainWindow):
         self.content_stack.addWidget(self.page_analysis)
         self.content_stack.addWidget(self.page_library)
 
+        self.action_save_optimizer_config.triggered.connect(
+            self.page_optimizer.save_config_dialog
+        )
+        self.action_load_optimizer_config.triggered.connect(
+            self.page_optimizer.load_config_dialog
+        )
+
         self.nav_rail.setCurrentRow(0)
 
     def switch_nav_page(self, index):
@@ -95,6 +102,13 @@ class ProPepUI(QMainWindow):
 
         menu_file.addAction("Load Composition...", self.load_composition)
         menu_file.addAction("Save Composition As...", self.save_composition)
+        menu_file.addSeparator()
+        self.action_load_optimizer_config = menu_file.addAction(
+            "Load Optimizer Config..."
+        )
+        self.action_save_optimizer_config = menu_file.addAction(
+            "Save Optimizer Config..."
+        )
         menu_file.addSeparator()
         menu_file.addAction("Export Results...", self.export_results)
 

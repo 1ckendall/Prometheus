@@ -1,9 +1,10 @@
-"""GUI page for Optuna-based propellant optimization."""
+"""GUI page for gradient-based propellant optimization."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from loguru import logger
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -32,10 +33,10 @@ from PySide6.QtWidgets import (
 from prometheus_equilibrium.gui.widgets.graph_canvas import GraphCanvas
 from prometheus_equilibrium.optimization import (
     FixedProportionGroup,
+    MultiStartGradientOptimizer,
     ObjectiveSpec,
     OperatingPoint,
     OptimizationProblem,
-    OptunaOptimizer,
     SumToTotalGroup,
     VariableBound,
 )
@@ -45,40 +46,47 @@ from prometheus_equilibrium.optimization import (
 class _RunConfig:
     """Lightweight optimization execution config passed to worker."""
 
-    n_trials: int
-    timeout_seconds: int | None
+    n_starts: int
+    max_iter_per_start: int
+    fd_step: float
+    n_workers: int
     seed: int | None
 
 
 class OptimizationWorker(QThread):
-    """Background worker that runs a full Optuna study."""
+    """Background worker that runs a multi-start gradient optimization."""
 
     progress = Signal(object)
     finished = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, optimizer: OptunaOptimizer, run_config: _RunConfig):
+    def __init__(self, optimizer: MultiStartGradientOptimizer, run_config: _RunConfig):
         super().__init__()
         self.optimizer = optimizer
         self.run_config = run_config
         self._cancel_requested = False
 
     def request_cancel(self) -> None:
-        """Request cancellation at the next trial boundary."""
+        """Request cancellation at the next start boundary."""
         self._cancel_requested = True
 
     def run(self) -> None:
+        logger.disable("prometheus_equilibrium.equilibrium")
         try:
             result = self.optimizer.optimize(
-                n_trials=self.run_config.n_trials,
-                timeout_seconds=self.run_config.timeout_seconds,
+                n_starts=self.run_config.n_starts,
+                max_iter_per_start=self.run_config.max_iter_per_start,
+                fd_step=self.run_config.fd_step,
                 seed=self.run_config.seed,
+                n_workers=self.run_config.n_workers,
                 progress_callback=self.progress.emit,
                 should_stop=lambda: self._cancel_requested,
             )
             self.finished.emit(result)
         except Exception as exc:
             self.failed.emit(str(exc))
+        finally:
+            logger.enable("prometheus_equilibrium.equilibrium")
 
 
 class OptimizerPage(QWidget):
@@ -91,6 +99,9 @@ class OptimizerPage(QWidget):
         self.worker: OptimizationWorker | None = None
         self._latest_best_composition: dict[str, float] | None = None
         self._live_history: list[tuple[int, float]] = []
+        self._start_history: dict[int, list[tuple[int, float]]] = {}
+        self._start_trace_enabled: dict[int, bool] = {}
+        self._start_trace_checks: dict[int, QCheckBox] = {}
         self._baseline_mass_fraction: dict[str, float] = {}
 
         layout = QVBoxLayout(self)
@@ -112,7 +123,7 @@ class OptimizerPage(QWidget):
         layout.addWidget(scroll_area)
 
     def _build_controls_group(self) -> QGroupBox:
-        group = QGroupBox("Objective and Study Controls")
+        group = QGroupBox("Objective and Run Controls")
         form = QFormLayout(group)
 
         self.combo_isp_variant = QComboBox()
@@ -124,14 +135,23 @@ class OptimizerPage(QWidget):
         self.spin_rho_exp.setSingleStep(0.05)
         self.spin_rho_exp.setValue(0.25)
 
-        self.spin_trials = QSpinBox()
-        self.spin_trials.setRange(1, 100000)
-        self.spin_trials.setValue(64)
+        self.spin_starts = QSpinBox()
+        self.spin_starts.setRange(1, 1000)
+        self.spin_starts.setValue(4)
 
-        self.spin_timeout = QSpinBox()
-        self.spin_timeout.setRange(0, 86_400)
-        self.spin_timeout.setValue(0)
-        self.spin_timeout.setSuffix(" s (0 = none)")
+        self.spin_max_iter = QSpinBox()
+        self.spin_max_iter.setRange(1, 1000)
+        self.spin_max_iter.setValue(10)
+
+        self.spin_n_workers = QSpinBox()
+        self.spin_n_workers.setRange(0, 64)
+        self.spin_n_workers.setValue(0)
+        self.spin_n_workers.setSuffix(" (0 = auto)")
+        self.spin_n_workers.setToolTip(
+            "Number of parallel worker processes.\n"
+            "0 = automatic (uses all available CPU cores).\n"
+            "1 = sequential (no process pool)."
+        )
 
         self.spin_seed = QSpinBox()
         self.spin_seed.setRange(0, 2_147_483_647)
@@ -140,16 +160,13 @@ class OptimizerPage(QWidget):
         self.check_shifting = QCheckBox("Score shifting expansion")
         self.check_shifting.setChecked(True)
 
-        self.combo_closure = QComboBox()
-        self.combo_closure.addItem("(none)", None)
-
         form.addRow("Isp variant", self.combo_isp_variant)
         form.addRow("Density exponent n", self.spin_rho_exp)
-        form.addRow("Trials", self.spin_trials)
-        form.addRow("Timeout", self.spin_timeout)
+        form.addRow("Starts", self.spin_starts)
+        form.addRow("Max iter / start", self.spin_max_iter)
+        form.addRow("Workers", self.spin_n_workers)
         form.addRow("Seed", self.spin_seed)
         form.addRow("Expansion mode", self.check_shifting)
-        form.addRow("Closure ingredient", self.combo_closure)
         return group
 
     def _build_variables_group(self) -> QGroupBox:
@@ -169,7 +186,7 @@ class OptimizerPage(QWidget):
         self.btn_from_sim.clicked.connect(self.load_from_simulator)
         self.btn_add_var = QPushButton("+ Add Variable")
         self.btn_add_var.clicked.connect(
-            lambda: self._append_variable_row("", 0.0, 1.0, "")
+            lambda: self._append_variable_row("", 0.0, 100.0, "")
         )
         self.btn_remove_var = QPushButton("Remove Selected")
         self.btn_remove_var.clicked.connect(self._remove_selected_variable)
@@ -187,7 +204,7 @@ class OptimizerPage(QWidget):
 
         self.table_group_rules = QTableWidget(0, 4)
         self.table_group_rules.setHorizontalHeaderLabels(
-            ["Group Label", "Type", "Min Total", "Max Total"]
+            ["Group Label", "Type", "Min Total (%)", "Max Total (%)"]
         )
         self.table_group_rules.horizontalHeader().setStretchLastSection(True)
         self.table_group_rules.setMinimumHeight(180)
@@ -199,16 +216,14 @@ class OptimizerPage(QWidget):
         self.btn_group_help = QPushButton("Group Rule Helper...")
         self.btn_group_help.clicked.connect(self._open_group_rule_helper)
 
-        grid.addWidget(
-            QLabel(
-                "Assign group labels in Variable Bounds (comma-separated for multiple groups), "
-                "then define one rule per label. "
-                "Fixed-proportion ratios are derived from the starting formulation. "
-                "Pinned ingredients are held at their Min value and excluded from optimisation."
-            ),
-            0,
-            0,
+        lbl = QLabel(
+            "Assign group labels in Variable Bounds (comma-separated for multiple groups), "
+            "then define one rule per label. "
+            "Fixed-proportion ratios are derived from the starting formulation. "
+            "Pinned ingredients are held at their Min value and excluded from optimisation."
         )
+        lbl.setWordWrap(True)
+        grid.addWidget(lbl, 0, 0)
         grid.addWidget(self.table_group_rules, 1, 0)
         actions = QHBoxLayout()
         actions.addWidget(self.btn_add_rule)
@@ -237,22 +252,12 @@ class OptimizerPage(QWidget):
         buttons.addWidget(self.btn_cancel)
         buttons.addWidget(self.btn_apply)
 
-        config_btns = QHBoxLayout()
-        self.btn_save_config = QPushButton("Save Config...")
-        self.btn_load_config = QPushButton("Load Config...")
-        self.btn_save_config.clicked.connect(self._save_config)
-        self.btn_load_config.clicked.connect(self._load_config)
-        config_btns.addWidget(self.btn_save_config)
-        config_btns.addWidget(self.btn_load_config)
-        config_btns.addStretch()
-
         self.progress_label = QLabel("Idle")
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
 
         layout.addLayout(buttons)
-        layout.addLayout(config_btns)
         layout.addWidget(self.progress_label)
         layout.addWidget(self.progress)
         return group
@@ -263,16 +268,22 @@ class OptimizerPage(QWidget):
 
         self.canvas_best = GraphCanvas(
             self,
-            "Best Objective (log scale objective)",
-            "Trial",
-            "Best log(Isp * rho^n)",
+            "Objective by Start (log scale objective)",
+            "Iteration",
+            "log(Isp * rho^n)",
         )
         self.canvas_best.setMinimumHeight(260)
+        self.worker_trace_toggles = QWidget(self)
+        self.worker_trace_layout = QHBoxLayout(self.worker_trace_toggles)
+        self.worker_trace_layout.setContentsMargins(0, 0, 0, 0)
+        self.worker_trace_layout.addWidget(QLabel("Start traces:"))
+        self.worker_trace_layout.addStretch()
         self.output = QTextEdit()
         self.output.setReadOnly(True)
         self.output.setText("Run an optimization to populate results.")
 
         layout.addWidget(self.canvas_best)
+        layout.addWidget(self.worker_trace_toggles)
         layout.addWidget(self.output)
         return group
 
@@ -293,41 +304,18 @@ class OptimizerPage(QWidget):
         pin_chk.setChecked(pinned)
         self.table_vars.setCellWidget(row, 3, pin_chk)
         self.table_vars.setItem(row, 4, QTableWidgetItem(group_label))
-        self._refresh_closure_options()
 
     def _remove_selected_variable(self) -> None:
         """Remove the currently selected row from the variable bounds table."""
         row = self.table_vars.currentRow()
         if row >= 0:
             self.table_vars.removeRow(row)
-            self._refresh_closure_options()
 
     def _remove_selected_rule(self) -> None:
         """Remove the currently selected row from the group rules table."""
         row = self.table_group_rules.currentRow()
         if row >= 0:
             self.table_group_rules.removeRow(row)
-
-    def _refresh_closure_options(self) -> None:
-        """Synchronize closure ingredient choices with variable-table ingredient IDs."""
-        current = self.combo_closure.currentData()
-        ingredient_ids = []
-        for row in range(self.table_vars.rowCount()):
-            item = self.table_vars.item(row, 0)
-            if item is None:
-                continue
-            ingredient_id = item.text().strip()
-            if ingredient_id:
-                ingredient_ids.append(ingredient_id)
-
-        self.combo_closure.blockSignals(True)
-        self.combo_closure.clear()
-        self.combo_closure.addItem("(none)", None)
-        for ingredient_id in ingredient_ids:
-            self.combo_closure.addItem(ingredient_id, ingredient_id)
-        idx = self.combo_closure.findData(current)
-        self.combo_closure.setCurrentIndex(idx if idx >= 0 else 0)
-        self.combo_closure.blockSignals(False)
 
     def _append_default_group_rule(self) -> None:
         row = self.table_group_rules.rowCount()
@@ -375,8 +363,8 @@ class OptimizerPage(QWidget):
         edit_max = QLineEdit(dialog)
         form.addRow("Group label", combo_label)
         form.addRow("Rule type", combo_type)
-        form.addRow("Min total", edit_min)
-        form.addRow("Max total", edit_max)
+        form.addRow("Min total (%)", edit_min)
+        form.addRow("Max total (%)", edit_max)
 
         buttons = QHBoxLayout()
         btn_ok = QPushButton("Add")
@@ -426,16 +414,16 @@ class OptimizerPage(QWidget):
             ingredient_id = str(row.get("name", "")).strip()
             if not ingredient_id:
                 continue
-            center = float(row.get("mass_fraction", 0.0)) / total
+            center = float(row.get("mass_fraction", 0.0)) / total  # 0–1 fraction
             minimum = max(0.0, center * 0.7)
             maximum = min(1.0, center * 1.3)
-            self._append_variable_row(ingredient_id, minimum, maximum, "")
-            self._baseline_mass_fraction[ingredient_id] = center
-
-        self._refresh_closure_options()
-        if self.combo_closure.count() > 1 and self.combo_closure.currentData() is None:
-            # Default closure to the first ingredient to avoid all-pruned runs.
-            self.combo_closure.setCurrentIndex(1)
+            # Display in the table as percentages (0–100)
+            self._append_variable_row(
+                ingredient_id, minimum * 100.0, maximum * 100.0, ""
+            )
+            self._baseline_mass_fraction[ingredient_id] = (
+                center  # kept as 0–1 for ratio derivation
+            )
 
         self.output.setText(
             "Loaded optimization bounds from Simulator solid formulation. "
@@ -458,8 +446,9 @@ class OptimizerPage(QWidget):
             if not ingredient_id:
                 continue
             pinned = isinstance(pin_widget, QCheckBox) and pin_widget.isChecked()
-            min_val = float(min_item.text())
-            max_val = min_val if pinned else float(max_item.text())
+            # Table stores percentages (0–100); convert to 0–1 fractions internally
+            min_val = float(min_item.text()) / 100.0
+            max_val = min_val if pinned else float(max_item.text()) / 100.0
             variables.append(
                 VariableBound(
                     ingredient_id=ingredient_id,
@@ -519,11 +508,12 @@ class OptimizerPage(QWidget):
             if rule_type == "sum_to_total":
                 min_text = ratios_item.text().strip() if ratios_item else ""
                 max_text = total_item.text().strip() if total_item else ""
-                min_total = float(min_text) if min_text else None
-                max_total = float(max_text) if max_text else None
+                # Table stores percentages (0–100); convert to 0–1 fractions internally
+                min_total = float(min_text) / 100.0 if min_text else None
+                max_total = float(max_text) / 100.0 if max_text else None
                 if min_total is None and max_total is None:
                     raise ValueError(
-                        f"Group {group_label!r}: set min and/or max total for inequality constraint."
+                        f"Group {group_label!r}: set min and/or max total (%) for inequality constraint."
                     )
                 sum_groups.append(
                     SumToTotalGroup(
@@ -548,10 +538,9 @@ class OptimizerPage(QWidget):
             fixed_proportion_groups=fixed_groups,
             sum_to_total_groups=sum_groups,
             total_mass_fraction=1.0,
-            closure_ingredient_id=self.combo_closure.currentData(),
         )
 
-    def _collect_optimizer(self) -> tuple[OptunaOptimizer, _RunConfig]:
+    def _collect_optimizer(self) -> tuple[MultiStartGradientOptimizer, _RunConfig]:
         objective = ObjectiveSpec(
             isp_variant=self.combo_isp_variant.currentText(),
             rho_exponent=float(self.spin_rho_exp.value()),
@@ -575,11 +564,13 @@ class OptimizerPage(QWidget):
 
         problem = self._collect_problem()
         run_cfg = _RunConfig(
-            n_trials=int(self.spin_trials.value()),
-            timeout_seconds=int(self.spin_timeout.value()) or None,
+            n_starts=int(self.spin_starts.value()),
+            max_iter_per_start=int(self.spin_max_iter.value()),
+            fd_step=1e-4,
+            n_workers=int(self.spin_n_workers.value()),
             seed=int(self.spin_seed.value()),
         )
-        optimizer = OptunaOptimizer(
+        optimizer = MultiStartGradientOptimizer(
             problem=problem,
             objective=objective,
             operating_point=operating_point,
@@ -616,15 +607,17 @@ class OptimizerPage(QWidget):
             problem=optimizer.problem,
             objective=optimizer.objective,
             operating_point=optimizer.operating_point,
-            n_trials=run_cfg.n_trials,
-            timeout_seconds=run_cfg.timeout_seconds,
+            n_starts=run_cfg.n_starts,
+            max_iter_per_start=run_cfg.max_iter_per_start,
+            fd_step=run_cfg.fd_step,
+            n_workers=run_cfg.n_workers,
             seed=run_cfg.seed,
             solver_type=solver_type,
             enabled_databases=ed.get_enabled_databases(),
             max_atoms=ed._max_atoms(),
         )
 
-    def _save_config(self) -> None:
+    def save_config_dialog(self) -> None:
         """Prompt for a path and write the current setup to a JSON config file."""
         try:
             config = self._collect_config()
@@ -648,7 +641,7 @@ class OptimizerPage(QWidget):
 
         self.output.setText(f"Config saved to:\n{path}")
 
-    def _load_config(self) -> None:
+    def load_config_dialog(self) -> None:
         """Prompt for a config JSON file and populate the optimizer page from it."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Optimizer Config", "", "JSON Files (*.json);;All Files (*)"
@@ -672,6 +665,41 @@ class OptimizerPage(QWidget):
             return
 
         self.output.setText(f"Config loaded from:\n{path}")
+
+    # Backward-compatible aliases for any existing signal wiring.
+    def _save_config(self) -> None:
+        """Alias to :meth:`save_config_dialog`."""
+        self.save_config_dialog()
+
+    def _load_config(self) -> None:
+        """Alias to :meth:`load_config_dialog`."""
+        self.load_config_dialog()
+
+    @staticmethod
+    def _normalise_composition(composition: dict[str, float]) -> dict[str, float]:
+        """Return a composition map normalised to sum to 1.0.
+
+        Args:
+            composition: Raw composition values.
+
+        Returns:
+            Positive-only composition scaled to unit total.
+
+        Raises:
+            ValueError: If no positive entries are available for normalisation.
+        """
+        positive = {
+            ingredient_id: float(value)
+            for ingredient_id, value in composition.items()
+            if float(value) > 0.0
+        }
+        total = sum(positive.values())
+        if total <= 0.0:
+            raise ValueError("Best composition has no positive values to normalise.")
+        return {
+            ingredient_id: value / total
+            for ingredient_id, value in sorted(positive.items())
+        }
 
     def _apply_config(self, config: dict) -> None:
         """Populate the optimizer page from a config dict.
@@ -705,14 +733,16 @@ class OptimizerPage(QWidget):
         for v in p.get("variables", []):
             ingredient_id = v["ingredient_id"]
             pinned = v.get("pinned", False)
-            min_val = float(v["minimum"])
-            max_val = min_val if pinned else float(v["maximum"])
+            # JSON stores percentages (0–100); pass directly to the table
+            min_pct = float(v["minimum"])
+            max_pct = min_pct if pinned else float(v["maximum"])
             labels = ",".join(label_map.get(ingredient_id, []))
             self._append_variable_row(
-                ingredient_id, min_val, max_val, labels, pinned=pinned
+                ingredient_id, min_pct, max_pct, labels, pinned=pinned
             )
+            # _baseline_mass_fraction is used for ratio derivation — store as 0–1
             self._baseline_mass_fraction[ingredient_id] = (
-                min_val if pinned else (min_val + max_val) / 2.0
+                min_pct / 100.0 if pinned else (min_pct + max_pct) / 200.0
             )
 
         # --- Group rules table ---
@@ -749,14 +779,6 @@ class OptimizerPage(QWidget):
                     "" if hi is None else str(hi)
                 )
 
-        # --- Closure ---
-        self._refresh_closure_options()
-        closure_id = p.get("closure_ingredient_id")
-        if closure_id:
-            idx = self.combo_closure.findData(closure_id)
-            if idx >= 0:
-                self.combo_closure.setCurrentIndex(idx)
-
         # --- Objective ---
         obj = config.get("objective", {})
         isp_idx = self.combo_isp_variant.findText(obj.get("isp_variant", "isp_actual"))
@@ -769,8 +791,9 @@ class OptimizerPage(QWidget):
 
         # --- Run config ---
         run = config.get("run", {})
-        self.spin_trials.setValue(int(run.get("n_trials", 64)))
-        self.spin_timeout.setValue(int(run.get("timeout_seconds") or 0))
+        self.spin_starts.setValue(int(run.get("n_starts", 4)))
+        self.spin_max_iter.setValue(int(run.get("max_iter_per_start", 10)))
+        self.spin_n_workers.setValue(int(run.get("n_workers", 0)))
         self.spin_seed.setValue(int(run.get("seed") or 42))
 
     def start_optimization(self) -> None:
@@ -785,11 +808,14 @@ class OptimizerPage(QWidget):
         self.btn_cancel.setEnabled(True)
         self.btn_apply.setEnabled(False)
         self.progress_label.setText("Running optimization...")
-        self.progress.setRange(0, run_cfg.n_trials)
+        self.progress.setRange(0, run_cfg.n_starts)
         self.progress.setValue(0)
         self._latest_best_composition = None
         self._live_history = []
+        self._start_history = {}
+        self._start_trace_enabled = {}
         self.output.setText("Running optimization...")
+        self._rebuild_start_trace_toggles()
         self._reset_history_plot()
 
         self.worker = OptimizationWorker(optimizer, run_cfg)
@@ -803,26 +829,42 @@ class OptimizerPage(QWidget):
         if self.worker is None:
             return
         self.worker.request_cancel()
-        self.progress_label.setText("Cancellation requested; stopping at next trial...")
+        self.progress_label.setText("Cancellation requested; stopping at next start...")
 
     def _on_progress(self, payload: dict) -> None:
-        trial = int(payload.get("trial", 0))
+        start = int(payload.get("start", 0))
+        n_starts = int(payload.get("n_starts", self.progress.maximum()))
+        objective_value = payload.get("objective_value")
+        start_trace = payload.get("start_trace")
         best = payload.get("best_value")
-        status_kind = payload.get("status_kind", "")
-        status_reason = payload.get("status_reason", "")
-        self.progress.setValue(min(trial + 1, self.progress.maximum()))
+        converged = payload.get("converged", False)
+        # Progress advances by completed starts; parallel mode may send out of order.
+        self.progress.setValue(min(self.progress.value() + 1, self.progress.maximum()))
+        if isinstance(start_trace, list):
+            points: list[tuple[int, float]] = []
+            for point in start_trace:
+                if isinstance(point, (list, tuple)) and len(point) == 2:
+                    points.append((int(point[0]), float(point[1])))
+            if points:
+                self._start_history[start] = points
+                if start not in self._start_trace_enabled:
+                    self._start_trace_enabled[start] = True
+                    self._rebuild_start_trace_toggles()
+            self._plot_history()
+
         if best is None:
             self.progress_label.setText(
-                f"Trial {trial + 1}: no complete trial yet"
-                + (f" ({status_kind})" if status_kind else "")
+                f"Start {start + 1}/{n_starts}: "
+                + ("converged" if converged else "failed")
             )
             return
-        if not self._live_history or self._live_history[-1][0] != trial:
-            self._live_history.append((trial, float(best)))
-            self._plot_history(self._live_history)
+        if not self._live_history or self._live_history[-1][0] != start:
+            self._live_history.append((start, float(best)))
         self.progress_label.setText(
-            f"Trial {trial + 1}: best log FoM = {best:.6f}"
-            + (f" ({status_kind}: {status_reason})" if status_reason else "")
+            f"Start {start + 1}/{n_starts}: "
+            f"objective = {float(objective_value):.6f}, best = {best:.6f}"
+            if objective_value is not None
+            else f"Start {start + 1}/{n_starts}: best log FoM = {best:.6f}"
         )
 
     def _on_finished(self, result) -> None:
@@ -832,7 +874,8 @@ class OptimizerPage(QWidget):
         self._latest_best_composition = dict(result.best_composition)
 
         self.progress_label.setText(
-            f"Finished: {result.completed_trials} complete, {result.pruned_trials} pruned"
+            f"Finished: {result.completed_trials} converged, "
+            f"{result.pruned_trials} failed"
         )
         self.progress.setValue(self.progress.maximum())
 
@@ -847,7 +890,13 @@ class OptimizerPage(QWidget):
             lines.append(f"- {ingredient_id}: {value:.6f}")
         self.output.setText("\n".join(lines))
         self._live_history = list(result.trial_history)
-        self._plot_history(result.trial_history)
+        self._start_history = {
+            int(start): list(points) for start, points in result.start_history.items()
+        }
+        for start in self._start_history:
+            self._start_trace_enabled.setdefault(start, True)
+        self._rebuild_start_trace_toggles()
+        self._plot_history()
 
     def _on_failed(self, message: str) -> None:
         self.btn_start.setEnabled(True)
@@ -865,13 +914,74 @@ class OptimizerPage(QWidget):
         ax.grid(True, linestyle="--", alpha=0.3)
         self.canvas_best.draw()
 
-    def _plot_history(self, history: list[tuple[int, float]]) -> None:
+    def _rebuild_start_trace_toggles(self) -> None:
+        while self.worker_trace_layout.count() > 2:
+            item = self.worker_trace_layout.takeAt(1)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        self._start_trace_checks = {}
+        for start_idx in sorted(self._start_history):
+            check = QCheckBox(f"Start {start_idx + 1}")
+            check.setChecked(self._start_trace_enabled.get(start_idx, True))
+            check.toggled.connect(
+                lambda state, start_id=start_idx: self._on_start_trace_toggled(
+                    start_id, state
+                )
+            )
+            self.worker_trace_layout.insertWidget(
+                self.worker_trace_layout.count() - 1, check
+            )
+            self._start_trace_checks[start_idx] = check
+
+    def _on_start_trace_toggled(self, start_idx: int, enabled: bool) -> None:
+        self._start_trace_enabled[start_idx] = enabled
+        self._plot_history()
+
+    def _plot_history(self) -> None:
         self._reset_history_plot()
-        if not history:
+        if not self._start_history:
             return
-        x = [t for t, _ in history]
-        y = [v for _, v in history]
-        self.canvas_best.axes.plot(x, y, "o-", color="#2a82da")
+
+        colors = [
+            "#2a82da",
+            "#e67e22",
+            "#2ecc71",
+            "#e74c3c",
+            "#9b59b6",
+            "#1abc9c",
+            "#f1c40f",
+            "#95a5a6",
+            "#ff6b6b",
+            "#48dbfb",
+        ]
+        markers = ["o", "s", "^", "D", "v", "P", "X", "*", "<", ">"]
+        plotted = False
+        for idx, start_idx in enumerate(sorted(self._start_history)):
+            if not self._start_trace_enabled.get(start_idx, True):
+                continue
+            points = self._start_history.get(start_idx, [])
+            if not points:
+                continue
+            x = [t for t, _ in points]
+            y = [v for _, v in points]
+            self.canvas_best.axes.plot(
+                x,
+                y,
+                linestyle="-",
+                marker=markers[idx % len(markers)],
+                color=colors[idx % len(colors)],
+                label=f"Start {start_idx + 1}",
+            )
+            plotted = True
+
+        if plotted:
+            legend = self.canvas_best.axes.legend(
+                facecolor="#1f1f1f", edgecolor="white"
+            )
+            for text in legend.get_texts():
+                text.set_color("white")
         self.canvas_best.draw()
 
     def apply_best_to_simulator(self) -> None:
@@ -880,15 +990,18 @@ class OptimizerPage(QWidget):
             QMessageBox.information(self, "No Result", "Run optimization first.")
             return
 
+        try:
+            normalised = self._normalise_composition(self._latest_best_composition)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Composition", str(exc))
+            return
+
         payload = {
             "schema_version": 1,
             "propellant_type": "solid",
             "components": [
                 {"name": ingredient_id, "mass_fraction": value}
-                for ingredient_id, value in sorted(
-                    self._latest_best_composition.items()
-                )
-                if value > 0.0
+                for ingredient_id, value in normalised.items()
             ],
         }
 

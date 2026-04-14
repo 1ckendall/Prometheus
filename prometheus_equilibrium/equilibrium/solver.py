@@ -542,7 +542,7 @@ class _ReactionAdjustmentBase(EquilibriumSolver, ABC):
                     )
                 )
 
-            _log_ts.debug(
+            _log_ts.trace(
                 "outer={:2d} T={:9.3f} f={:.4e} fp={:.4e} dlnT={:.4e} [T_lo={:.1f} T_hi={:.1f}] inner_conv={}",
                 n_outer,
                 T,
@@ -1104,7 +1104,7 @@ class PEPSolver(_ReactionAdjustmentBase):
                 _n_large = sum(
                     1 for j in range(N) if LL[j] > 0 and mixture.moles[j] > FLOOR * 10
                 )
-                _log_pep.debug(
+                _log_pep.trace(
                     "JC={:2d} pass={} T={:.1f} VQQ={:.3f} any_large={} n_active={}",
                     JC,
                     sweep_pass,
@@ -1800,7 +1800,7 @@ class MajorSpeciesSolver(_ReactionAdjustmentBase):
             _el_res_max = (
                 float(np.max(np.abs(element_res))) if len(element_res) else 0.0
             )
-            _log_hyb.debug(
+            _log_hyb.trace(
                 "inner={:3d} T={:.1f} el_res={:.3e} dlnn={:.3e} n_maj={} n_min={}",
                 n_inner,
                 T,
@@ -2480,7 +2480,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
                 history[-1].max_residual = _max_crit
             last_step_norm = float(_max_crit)
 
-            _log.debug(
+            _log.trace(
                 "iter={:3d} T={:9.2f} lam={:.4f} dlnT={:.3e} dlnn={:.3e}",
                 n_inner,
                 T,
@@ -2539,7 +2539,7 @@ class GordonMcBrideSolver(EquilibriumSolver):
                     T,
                 )
             else:
-                _log.debug(
+                _log.trace(
                     "Exploratory solve did not converge within {} iterations. Final T={:.2f} K",
                     self.max_iterations,
                     T,

@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 from prometheus_equilibrium.equilibrium.species import SpeciesDatabase
-from prometheus_equilibrium.gui.main_window import ProPepUI
+from prometheus_equilibrium.gui.main_window import PrometheusGUI
 from prometheus_equilibrium.propellants import PropellantDatabase
 
 
@@ -79,6 +79,6 @@ def main():
     )
     prop_db.load()
 
-    window = ProPepUI(prop_db, spec_db)
+    window = PrometheusGUI(prop_db, spec_db)
     window.show()
     return app.exec()

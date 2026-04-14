@@ -19,7 +19,13 @@ class _MidpointTrial:
         return 0.5 * (low + high)
 
 
+# ---------------------------------------------------------------------------
+# Fixed-proportion groups
+# ---------------------------------------------------------------------------
+
+
 def test_fixed_ratio_group_enforces_internal_proportions():
+    """HTPB:IPDI ratio is preserved; AP (standalone, last) absorbs the residual."""
     problem = OptimizationProblem(
         variables=[
             VariableBound("HTPB", 0.08, 0.16),
@@ -33,19 +39,45 @@ def test_fixed_ratio_group_enforces_internal_proportions():
                 ratios=[100.0, 8.0],
             )
         ],
-        closure_ingredient_id="AP",
     )
 
     composition = FormulationConstraintCompiler(problem).build_from_trial(
         _MidpointTrial()
     )
-    ratio = composition["IPDI"] / composition["HTPB"]
-
-    assert abs(ratio - 0.08) < 1e-12
+    assert abs(composition["IPDI"] / composition["HTPB"] - 0.08) < 1e-12
     assert abs(sum(composition.values()) - 1.0) < 1e-8
 
 
-def test_sum_to_total_group_respects_total():
+def test_fixed_group_only_partition():
+    """Two fixed-proportion groups partition the total exactly."""
+    problem = OptimizationProblem(
+        variables=[
+            VariableBound("A", 0.30, 0.50),
+            VariableBound("B", 0.10, 0.20),  # ratio 3:1 with A → g in [0.40, 0.60]
+            VariableBound("C", 0.20, 0.40),
+            VariableBound("D", 0.20, 0.40),  # ratio 1:1 with C → g in [0.40, 0.80]
+        ],
+        fixed_proportion_groups=[
+            FixedProportionGroup(group_id="g1", members=["A", "B"], ratios=[3.0, 1.0]),
+            FixedProportionGroup(group_id="g2", members=["C", "D"], ratios=[1.0, 1.0]),
+        ],
+    )
+
+    composition = FormulationConstraintCompiler(problem).build_from_trial(
+        _MidpointTrial()
+    )
+    assert abs(composition["B"] / composition["A"] - 1.0 / 3.0) < 1e-12
+    assert abs(composition["D"] / composition["C"] - 1.0) < 1e-12
+    assert abs(sum(composition.values()) - 1.0) < 1e-8
+
+
+# ---------------------------------------------------------------------------
+# Sum-to-total groups
+# ---------------------------------------------------------------------------
+
+
+def test_sum_to_total_group_respects_exact_total():
+    """Sum group with exact total; standalone ingredient absorbs the remainder."""
     problem = OptimizationProblem(
         variables=[
             VariableBound("AP", 0.60, 0.80),
@@ -55,7 +87,6 @@ def test_sum_to_total_group_respects_total():
         sum_to_total_groups=[
             SumToTotalGroup(group_id="solids", members=["AP", "AL"], total=0.84)
         ],
-        closure_ingredient_id="BINDER",
     )
 
     composition = FormulationConstraintCompiler(problem).build_from_trial(
@@ -65,7 +96,8 @@ def test_sum_to_total_group_respects_total():
     assert abs(sum(composition.values()) - 1.0) < 1e-8
 
 
-def test_sum_to_total_group_respects_min_max_inequality():
+def test_sum_to_total_group_respects_min_max_bounds():
+    """Sum group with inequality bounds; standalone absorbs remainder."""
     problem = OptimizationProblem(
         variables=[
             VariableBound("AP", 0.60, 0.80),
@@ -80,7 +112,6 @@ def test_sum_to_total_group_respects_min_max_inequality():
                 maximum_total=0.88,
             )
         ],
-        closure_ingredient_id="BINDER",
     )
 
     composition = FormulationConstraintCompiler(problem).build_from_trial(
@@ -91,26 +122,34 @@ def test_sum_to_total_group_respects_min_max_inequality():
     assert abs(sum(composition.values()) - 1.0) < 1e-8
 
 
-def test_fixed_proportion_members_can_participate_in_sum_group():
-    """An ingredient in a fixed-proportion group may also appear in a sum-to-total group."""
+# ---------------------------------------------------------------------------
+# Hierarchical (group + group) partition — the primary new capability
+# ---------------------------------------------------------------------------
+
+
+def test_fixed_group_and_sum_group_partition_total():
+    """Fixed-proportion group + sum-to-total group partition 100 % without closure."""
+    # Binder (R45+MDI at 3:1) + Solid (AP+AL+Bi2O3, max 84 %) = 100 %
     problem = OptimizationProblem(
         variables=[
-            VariableBound("A", 0.1, 0.5),
-            VariableBound("B", 0.1, 0.5),
-            VariableBound("C", 0.4, 0.9),
+            VariableBound("R45", 0.084, 0.156),
+            VariableBound("MDI", 0.028, 0.052),
+            VariableBound("AP", 0.35, 0.65),
+            VariableBound("AL", 0.098, 0.098),  # pinned
+            VariableBound("Bi2O3", 0.14, 0.26),
         ],
         fixed_proportion_groups=[
             FixedProportionGroup(
-                group_id="ab_blend",
-                members=["A", "B"],
-                ratios=[1.0, 1.0],  # A == B always
+                group_id="Binder",
+                members=["R45", "MDI"],
+                ratios=[0.75, 0.25],
             )
         ],
         sum_to_total_groups=[
             SumToTotalGroup(
-                group_id="total",
-                members=["A", "B", "C"],
-                total=1.0,
+                group_id="Solid",
+                members=["AP", "AL", "Bi2O3"],
+                maximum_total=0.84,
             )
         ],
     )
@@ -119,49 +158,58 @@ def test_fixed_proportion_members_can_participate_in_sum_group():
         _MidpointTrial()
     )
 
-    # Fixed proportion respected: A and B are equal
-    assert abs(composition["A"] - composition["B"]) < 1e-10
-    # Sum constraint satisfied
+    # Mass balance
     assert abs(sum(composition.values()) - 1.0) < 1e-8
+    # Ratio lock
+    assert abs(composition["MDI"] / composition["R45"] - 0.25 / 0.75) < 1e-10
+    # Solid constraint
+    solid_total = composition["AP"] + composition["AL"] + composition["Bi2O3"]
+    assert solid_total <= 0.84 + 1e-9
+    # Pinned ingredient
+    assert abs(composition["AL"] - 0.098) < 1e-10
 
 
-def test_fixed_proportion_group_total_counted_against_sum_group():
-    """Pre-assigned members reduce the target the sum group must fill."""
-    # HTPB+IPDI locked at 100:8; their combined total comes out of the 0.84 solids budget.
+def test_sum_group_max_enforced_via_binder_budget():
+    """Solid ≤ 84 % is satisfied by construction; binder gets the residual."""
     problem = OptimizationProblem(
         variables=[
-            VariableBound("HTPB", 0.08, 0.16),
-            VariableBound("IPDI", 0.0064, 0.0128),
-            VariableBound("AP", 0.60, 0.92),
+            VariableBound("R45", 0.084, 0.156),
+            VariableBound("MDI", 0.028, 0.052),
+            VariableBound("AP", 0.35, 0.65),
+            VariableBound("AL", 0.098, 0.098),
+            VariableBound("Bi2O3", 0.14, 0.26),
         ],
         fixed_proportion_groups=[
-            FixedProportionGroup(
-                group_id="binder",
-                members=["HTPB", "IPDI"],
-                ratios=[100.0, 8.0],
-            )
+            FixedProportionGroup("Binder", ["R45", "MDI"], [3.0, 1.0])
         ],
         sum_to_total_groups=[
-            SumToTotalGroup(
-                group_id="propellant",
-                members=["HTPB", "IPDI", "AP"],
-                total=1.0,
-            )
+            SumToTotalGroup("Solid", ["AP", "AL", "Bi2O3"], maximum_total=0.84)
         ],
     )
+    compiler = FormulationConstraintCompiler(problem)
 
-    composition = FormulationConstraintCompiler(problem).build_from_trial(
-        _MidpointTrial()
-    )
+    # Run multiple trials using different allocation points to check the bound.
+    class _HighTrial:
+        def suggest_float(self, _name, low, high):
+            return high  # maximise every sample
 
-    # Ratio still locked
-    assert abs(composition["IPDI"] / composition["HTPB"] - 8.0 / 100.0) < 1e-10
-    # All three sum to 1.0
-    assert abs(sum(composition.values()) - 1.0) < 1e-8
+    class _LowTrial:
+        def suggest_float(self, _name, low, high):
+            return low  # minimise every sample
+
+    for trial in [_MidpointTrial(), _HighTrial(), _LowTrial()]:
+        comp = compiler.build_from_trial(trial)
+        solid = comp["AP"] + comp["AL"] + comp["Bi2O3"]
+        assert solid <= 0.84 + 1e-9, f"Solid constraint violated: {solid:.6f}"
+        assert abs(sum(comp.values()) - 1.0) < 1e-8
+
+
+# ---------------------------------------------------------------------------
+# Validation errors
+# ---------------------------------------------------------------------------
 
 
 def test_ingredient_in_multiple_fixed_proportion_groups_is_rejected():
-    """An ingredient cannot appear in two fixed-proportion groups."""
     problem = OptimizationProblem(
         variables=[
             VariableBound("A", 0.1, 0.5),
@@ -179,7 +227,6 @@ def test_ingredient_in_multiple_fixed_proportion_groups_is_rejected():
 
 
 def test_ingredient_in_multiple_sum_groups_is_rejected():
-    """An ingredient cannot appear in two sum-to-total groups."""
     problem = OptimizationProblem(
         variables=[
             VariableBound("A", 0.1, 0.4),
@@ -206,8 +253,35 @@ def test_ingredient_in_multiple_sum_groups_is_rejected():
         FormulationConstraintCompiler(problem)
 
 
-def test_missing_closure_ingredient_causes_infeasible_trial():
-    """When no closure is configured and free variables cannot sum to target, trial is pruned."""
+def test_ingredient_in_fixed_and_sum_group_is_rejected():
+    """Cross-type membership is now rejected under the hierarchical model."""
+    problem = OptimizationProblem(
+        variables=[
+            VariableBound("A", 0.1, 0.5),
+            VariableBound("B", 0.1, 0.5),
+            VariableBound("C", 0.1, 0.5),
+        ],
+        fixed_proportion_groups=[
+            FixedProportionGroup(group_id="fp", members=["A", "B"], ratios=[1.0, 1.0]),
+        ],
+        sum_to_total_groups=[
+            SumToTotalGroup(
+                group_id="st",
+                members=["B", "C"],
+                minimum_total=0.2,
+                maximum_total=0.8,
+            ),
+        ],
+    )
+
+    with pytest.raises(
+        ValueError, match="both a fixed-proportion group and a sum-to-total group"
+    ):
+        FormulationConstraintCompiler(problem)
+
+
+def test_infeasible_when_bounds_cannot_sum_to_total():
+    """Trial is pruned when standalone bounds cannot sum to total_mass_fraction."""
     problem = OptimizationProblem(
         variables=[
             VariableBound("A", 0.1, 0.2),

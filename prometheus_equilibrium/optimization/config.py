@@ -25,8 +25,7 @@ Example config::
         "sum_to_total_groups": [
           {"group_id": "solids", "members": ["AP", "AL"], "minimum_total": 80.0, "maximum_total": 88.0}
         ],
-        "total_mass_fraction": 100.0,
-        "closure_ingredient_id": "HTPB"
+        "total_mass_fraction": 100.0
       },
       "objective": {"isp_variant": "isp_actual", "rho_exponent": 0.25},
       "operating_point": {
@@ -36,12 +35,17 @@ Example config::
         "ambient_pressure_pa": 101325.0,
         "shifting": true
       },
-      "run": {"n_trials": 64, "timeout_seconds": null, "seed": 42},
+      "run": {"n_starts": 4, "max_iter_per_start": 10, "fd_step": 0.0001, "n_workers": 0, "seed": 42},
       "solver": {"type": "gmcb", "enabled_databases": ["NASA-7", "NASA-9", "TERRA"], "max_atoms": 6}
     }
 
 A pinned variable has ``minimum == maximum``; the ``pinned`` field is stored for
 display round-trip convenience but ``minimum`` always carries the fixed value.
+
+There is no ``closure_ingredient_id`` field.  Mass balance is guaranteed by the
+hierarchical two-level sampler in
+:class:`~prometheus_equilibrium.optimization.constraints.FormulationConstraintCompiler`;
+no ingredient needs special designation.
 """
 
 from __future__ import annotations
@@ -67,8 +71,10 @@ def dump_config(
     problem: OptimizationProblem,
     objective: ObjectiveSpec,
     operating_point: OperatingPoint,
-    n_trials: int,
-    timeout_seconds: int | None,
+    n_starts: int,
+    max_iter_per_start: int,
+    fd_step: float,
+    n_workers: int,
     seed: int | None,
     solver_type: str,
     enabled_databases: list[str],
@@ -84,8 +90,10 @@ def dump_config(
         problem: Formulation constraint definition.
         objective: Isp variant and density exponent.
         operating_point: Chamber / expansion conditions.
-        n_trials: Maximum number of Optuna trials.
-        timeout_seconds: Wall-clock timeout, or ``None`` for no limit.
+        n_starts: Number of independent SLSQP starting points.
+        max_iter_per_start: Maximum SLSQP iterations per start.
+        fd_step: Finite-difference step size (0–1 mass-fraction scale).
+        n_workers: Parallel worker count (0 = automatic).
         seed: Random seed, or ``None`` for non-deterministic.
         solver_type: Solver key (``"gmcb"``, ``"mss"``, ``"hybrid"``).
         enabled_databases: Thermo database labels to use.
@@ -133,7 +141,6 @@ def dump_config(
             "fixed_proportion_groups": fixed_groups,
             "sum_to_total_groups": sum_groups,
             "total_mass_fraction": problem.total_mass_fraction * 100.0,
-            "closure_ingredient_id": problem.closure_ingredient_id,
         },
         "objective": {
             "isp_variant": objective.isp_variant,
@@ -147,8 +154,10 @@ def dump_config(
             "shifting": operating_point.shifting,
         },
         "run": {
-            "n_trials": n_trials,
-            "timeout_seconds": timeout_seconds,
+            "n_starts": n_starts,
+            "max_iter_per_start": max_iter_per_start,
+            "fd_step": fd_step,
+            "n_workers": n_workers,
             "seed": seed,
         },
         "solver": {
@@ -212,7 +221,6 @@ def load_problem(d: dict[str, Any]) -> OptimizationProblem:
         fixed_proportion_groups=fixed_groups,
         sum_to_total_groups=sum_groups,
         total_mass_fraction=float(p.get("total_mass_fraction", 100.0)) / 100.0,
-        closure_ingredient_id=p.get("closure_ingredient_id"),
     )
 
 
@@ -251,20 +259,27 @@ def load_operating_point(d: dict[str, Any]) -> OperatingPoint:
     )
 
 
-def load_run_config(d: dict[str, Any]) -> tuple[int, int | None, int | None]:
-    """Return ``(n_trials, timeout_seconds, seed)`` from a config dict.
+def load_gradient_config(
+    d: dict[str, Any],
+) -> tuple[int, int, float, int, int | None]:
+    """Return gradient-optimizer run settings from a config dict.
+
+    Reads the ``run`` section for gradient-specific keys, with sensible
+    defaults when absent.
 
     Args:
         d: Full config dict.
 
     Returns:
-        Tuple of ``(n_trials, timeout_seconds, seed)`` where
-        ``timeout_seconds`` and ``seed`` may be ``None``.
+        Tuple ``(n_starts, max_iter_per_start, fd_step, n_workers, seed)``
+        where ``seed`` may be ``None``.
     """
     r = d.get("run", {})
     return (
-        int(r.get("n_trials", 64)),
-        r.get("timeout_seconds"),
+        int(r.get("n_starts", 4)),
+        int(r.get("max_iter_per_start", 10)),
+        float(r.get("fd_step", 1e-4)),
+        int(r.get("n_workers", 0)),
         r.get("seed"),
     )
 

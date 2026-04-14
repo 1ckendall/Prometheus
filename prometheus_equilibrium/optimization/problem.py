@@ -11,8 +11,8 @@ class VariableBound:
 
     Args:
         ingredient_id: Ingredient ID from :class:`PropellantDatabase`.
-        minimum: Lower bound (inclusive).
-        maximum: Upper bound (inclusive).
+        minimum: Lower bound (inclusive), as a 0–1 fraction.
+        maximum: Upper bound (inclusive), as a 0–1 fraction.
     """
 
     ingredient_id: str
@@ -42,9 +42,9 @@ class SumToTotalGroup:
     Args:
         group_id: Unique group label for diagnostics and trial parameter names.
         members: Ingredient IDs constrained by this group.
-        total: Optional exact required sum for the group's members.
-        minimum_total: Optional lower bound for the group total.
-        maximum_total: Optional upper bound for the group total.
+        total: Optional exact required sum for the group's members (0–1 fraction).
+        minimum_total: Optional lower bound for the group total (0–1 fraction).
+        maximum_total: Optional upper bound for the group total (0–1 fraction).
     """
 
     group_id: str
@@ -57,7 +57,7 @@ class SumToTotalGroup:
         """Return effective lower/upper bounds for this group's total.
 
         Returns:
-            Tuple ``(low, high)`` of group total bounds.
+            Tuple ``(low, high)`` of group total bounds as 0–1 fractions.
         """
         if self.total is not None:
             return self.total, self.total
@@ -103,21 +103,29 @@ class OperatingPoint:
 class OptimizationProblem:
     """Constraint and normalization definition for a formulation search.
 
+    The compiler uses a two-level hierarchical sampling strategy:
+
+    - **Level 1** – allocate the total mass fraction among compositional units
+      (fixed-proportion groups, sum-to-total groups, and standalone ingredients)
+      using budget-aware sequential sampling.  Mass balance is satisfied by
+      construction; no closure ingredient is required.
+    - **Level 2** – distribute each unit's allocated total among its members.
+      Fixed groups use the ratio lock; sum groups use sequential sampling with
+      the last member absorbing the group residual.
+
+    Each ingredient must belong to **at most one** group (fixed or sum).
+
     Args:
-        variables: Per-ingredient bounds.
+        variables: Per-ingredient bounds (0–1 fractions).
         fixed_proportion_groups: Ratio-locked ingredient groups.
-        sum_to_total_groups: Groups constrained to a fixed total mass fraction.
-        total_mass_fraction: Required total mass-fraction sum.
-        closure_ingredient_id: Optional ingredient used to close mass balance.
-        closure_tolerance: Absolute tolerance for mass-balance closure checks.
+        sum_to_total_groups: Groups constrained to a bounded total mass fraction.
+        total_mass_fraction: Required total mass-fraction sum (default 1.0).
     """
 
     variables: list[VariableBound]
     fixed_proportion_groups: list[FixedProportionGroup] = field(default_factory=list)
     sum_to_total_groups: list[SumToTotalGroup] = field(default_factory=list)
     total_mass_fraction: float = 1.0
-    closure_ingredient_id: str | None = None
-    closure_tolerance: float = 1e-8
 
     def validate(self) -> None:
         """Validate problem consistency.
@@ -128,7 +136,7 @@ class OptimizationProblem:
         if not self.variables:
             raise ValueError("At least one variable bound is required.")
 
-        seen = set()
+        seen: set[str] = set()
         for var in self.variables:
             if not var.ingredient_id:
                 raise ValueError("Variable ingredient_id cannot be blank.")
@@ -200,40 +208,19 @@ class OptimizationProblem:
         if self.total_mass_fraction <= 0.0:
             raise ValueError("total_mass_fraction must be > 0.")
 
-        if (
-            self.closure_ingredient_id is not None
-            and self.closure_ingredient_id not in seen
-        ):
-            raise ValueError(
-                "closure_ingredient_id must reference a defined variable bound ingredient."
-            )
-
-        if self.closure_ingredient_id is not None:
-            for grp in self.sum_to_total_groups:
-                if self.closure_ingredient_id in grp.members:
-                    raise ValueError(
-                        f"Closure ingredient {self.closure_ingredient_id!r} is a member "
-                        f"of sum group {grp.group_id!r}. The closure always overrides "
-                        "sum-group assignments, making the group constraint unreliable. "
-                        "Remove the closure from the group, or choose a different closure."
-                    )
-
-        objective_ingredient_ids = {v.ingredient_id for v in self.variables}
+        ingredient_ids = {v.ingredient_id for v in self.variables}
         for grp in self.fixed_proportion_groups:
             for member in grp.members:
-                if member not in objective_ingredient_ids:
+                if member not in ingredient_ids:
                     raise ValueError(
                         f"Fixed group {grp.group_id!r} references unknown ingredient {member!r}."
                     )
         for grp in self.sum_to_total_groups:
             for member in grp.members:
-                if member not in objective_ingredient_ids:
+                if member not in ingredient_ids:
                     raise ValueError(
                         f"Sum group {grp.group_id!r} references unknown ingredient {member!r}."
                     )
-
-        if not (0.0 <= self.closure_tolerance < 1.0):
-            raise ValueError("closure_tolerance must be in [0, 1).")
 
 
 def validate_objective(spec: ObjectiveSpec) -> None:
