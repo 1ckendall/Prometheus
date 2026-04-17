@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTabWidget,
     QVBoxLayout,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from prometheus_equilibrium.gui.dialogs.database_search import DatabaseSearchDialog
+from prometheus_equilibrium.gui.engine import SimulatorPanel
 
 
 class SimulatorPage(QWidget):
@@ -63,9 +65,9 @@ class SimulatorPage(QWidget):
         self.double_validator.setLocale(QLocale(QLocale.English, QLocale.UnitedStates))
         self.int_validator = QIntValidator(2, 10000, self)
 
-        layout = QVBoxLayout(self)
-        self.sim_tabs = QTabWidget()
+        self.config_panel = SimulatorPanel(main_window)
 
+        self.sim_tabs = QTabWidget()
         self.tab_solid = QWidget()
         self.tab_biprop = QWidget()
         self.sim_tabs.addTab(self.tab_biprop, "Bipropellant (O/F)")
@@ -77,16 +79,23 @@ class SimulatorPage(QWidget):
             lambda _idx: self._notify_formulation_changed()
         )
 
-        layout.addWidget(self.sim_tabs)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.sim_tabs)
+        splitter.addWidget(self.config_panel)
+        self.config_panel.setMinimumWidth(320)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(splitter)
         self._suspend_formulation_notifications = False
 
     def _notify_formulation_changed(self) -> None:
         """Clear stale outputs when the formulation inputs are edited."""
         if self._suspend_formulation_notifications:
             return
-        engine_dock = getattr(self.main_window, "engine_dock", None)
-        if engine_dock is not None and hasattr(engine_dock, "clear_previous_results"):
-            engine_dock.clear_previous_results()
+        self.config_panel.clear_previous_results()
 
     def setup_bipropellant_tab(self):
         main_layout = QVBoxLayout(self.tab_biprop)
@@ -171,13 +180,13 @@ class SimulatorPage(QWidget):
 
         # Only one sweep may be active at a time: if O/F sweep is enabled,
         # force Pc sweep back to single-value mode.
-        if is_sweep and hasattr(self.main_window, "engine_dock"):
-            engine = self.main_window.engine_dock
-            if engine.pc_mode_combo.currentText() == "Sweep Range":
-                engine.pc_mode_combo.blockSignals(True)
-                engine.pc_mode_combo.setCurrentText("Single Value")
-                engine.pc_mode_combo.blockSignals(False)
-                engine.handle_pc_mode("Single Value")
+        if is_sweep:
+            panel = self.config_panel
+            if panel.pc_mode_combo.currentText() == "Sweep Range":
+                panel.pc_mode_combo.blockSignals(True)
+                panel.pc_mode_combo.setCurrentText("Single Value")
+                panel.pc_mode_combo.blockSignals(False)
+                panel.handle_pc_mode("Single Value")
         self._notify_formulation_changed()
 
     def _build_biprop_table(self, parent_layout, title, add_func, norm_func):
@@ -375,9 +384,7 @@ class SimulatorPage(QWidget):
             f"ρ: {rho / 1000:.3f} g/cc" if rho is not None else "ρ: N/A"
         )
         self._update_biprop_combined_density()
-        # Notify engine dock to update O/F display
-        if hasattr(self.main_window, "engine_dock"):
-            self.main_window.engine_dock.update_actual_of()
+        self.config_panel.update_actual_of()
 
     def update_fuel_totals(self):
         self._update_biprop_totals(

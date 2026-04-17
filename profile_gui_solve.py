@@ -2,7 +2,7 @@
 profile_gui_solve.py — Profile PerformanceSolver.solve_pair as the GUI executes it.
 
 Replicates the exact call chain used by PerformanceWorker.run() for the KNSB
-solid propellant loaded from KNSB.prop.
+solid propellant loaded from KNSB.prop.json.
 
 Usage:
     uv run python profile_gui_solve.py              # wall-clock timing + max_atoms sweep
@@ -34,14 +34,14 @@ from prometheus_equilibrium.equilibrium.species import SpeciesDatabase
 from prometheus_equilibrium.propellants import PropellantDatabase
 
 # ---------------------------------------------------------------------------
-# Configuration — mirrors GUI defaults for KNSB.prop
+# Configuration — mirrors GUI defaults for KNSB.prop.json
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parent
 _THERMO_DIR = _REPO_ROOT / "prometheus_equilibrium" / "thermo_data"
 _PROP_TOML = _REPO_ROOT / "prometheus_equilibrium" / "propellants" / "propellants.toml"
 
-# KNSB composition (from KNSB.prop)
+# KNSB composition (from KNSB.prop.json)
 COMPONENTS = [
     ("POTASSIUM_NITRATE", 65.0),
     ("SORBITOL", 35.0),
@@ -53,7 +53,7 @@ PE_MPA = 0.101325
 AMBIENT_MPA = 0.101325
 
 # Solver to profile ("gmcb", "hybrid", "mss")
-SOLVER_KEY = "gmcb"
+SOLVER_KEY = "hybrid"
 
 # Feature flags
 COMPUTE_PROFILE = False

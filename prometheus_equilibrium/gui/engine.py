@@ -6,7 +6,6 @@ from PySide6.QtGui import QDoubleValidator, QIntValidator
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDockWidget,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -131,15 +130,10 @@ class PerformanceWorker(QThread):
             )
 
 
-class EngineDock(QDockWidget):
-    def __init__(self, main_window, title="Simulation Configuration"):
-        super().__init__(title, main_window)
+class SimulatorPanel(QWidget):
+    def __init__(self, main_window):
+        super().__init__()
         self.main_window = main_window
-        self.setAllowedAreas(Qt.RightDockWidgetArea)
-        self.setFeatures(
-            QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetMovable
-        )
-        self.setMinimumWidth(340)
 
         self.double_validator = QDoubleValidator()
         self.double_validator.setNotation(QDoubleValidator.StandardNotation)
@@ -148,6 +142,8 @@ class EngineDock(QDockWidget):
         self.double_validator.setLocale(locale)
         self.int_validator = QIntValidator(2, 10000, self)
 
+        panel_layout = QVBoxLayout(self)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -240,9 +236,9 @@ class EngineDock(QDockWidget):
 
         db_layout.addWidget(self.check_nasa7, 0, 0)
         db_layout.addWidget(self.check_nasa9, 0, 1)
-        db_layout.addWidget(self.check_janaf, 1, 0)
-        db_layout.addWidget(self.check_afcesic, 1, 1)
-        db_layout.addWidget(self.check_terra, 2, 0)
+        db_layout.addWidget(self.check_janaf, 0, 2)
+        db_layout.addWidget(self.check_afcesic, 1, 0)
+        db_layout.addWidget(self.check_terra, 1, 1)
         group_db.setLayout(db_layout)
         layout.addWidget(group_db)
 
@@ -370,7 +366,7 @@ class EngineDock(QDockWidget):
 
         layout.addStretch()
         scroll_area.setWidget(dock_contents)
-        self.setWidget(scroll_area)
+        panel_layout.addWidget(scroll_area)
 
         # Ensure pressure-related labels are initialised consistently.
         self.refresh_pressure_labels()
@@ -1226,3 +1222,229 @@ class EngineDock(QDockWidget):
             self.main_window.statusBar().showMessage(fail_msg, 5000)
             self._render_error_report("Equilibrium Solver Failure", fail_msg)
             self._last_report_payload = None
+
+
+class OptimizerPanel(QWidget):
+    """Right-hand configuration panel shown inside the Optimizer page.
+
+    Exposes the operating-point and solver settings the optimizer page needs
+    (chamber pressure, expansion spec, ambient pressure, species databases,
+    solver algorithm and max-atoms limit).  The public API mirrors the subset
+    of :class:`SimulatorPanel` methods used by :class:`OptimizerPage`.
+    """
+
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+
+        self.double_validator = QDoubleValidator()
+        self.double_validator.setNotation(QDoubleValidator.StandardNotation)
+        locale = QLocale(QLocale.English, QLocale.UnitedStates)
+        locale.setNumberOptions(QLocale.RejectGroupSeparator)
+        self.double_validator.setLocale(locale)
+
+        panel_layout = QVBoxLayout(self)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        dock_contents = QWidget()
+        layout = QVBoxLayout(dock_contents)
+
+        # Operating Conditions
+        group_conditions = QGroupBox("Operating Conditions")
+        form_conditions = QFormLayout()
+
+        self.lbl_pc = QLabel("Chamber Pressure (MPa)")
+        self.input_pc = QLineEdit("6.894757")
+        self.input_pc.setAlignment(Qt.AlignRight)
+        self.input_pc.setValidator(self.double_validator)
+
+        self.spec_combo = QComboBox()
+        self.spec_combo.addItems(["Exhaust Pressure", "Area Ratio (Ae/At)"])
+        self.lbl_exp = QLabel("Exhaust Pressure (MPa)")
+        self.input_exp = QLineEdit("0.101325")
+        self.input_exp.setAlignment(Qt.AlignRight)
+        self.input_exp.setValidator(self.double_validator)
+        self.spec_combo.currentTextChanged.connect(self._update_exp_label)
+
+        self.lbl_amb = QLabel("Ambient Pressure (MPa)")
+        self.input_ambient = QLineEdit("0.101325")
+        self.input_ambient.setAlignment(Qt.AlignRight)
+        self.input_ambient.setValidator(self.double_validator)
+
+        form_conditions.addRow(self.lbl_pc, self.input_pc)
+        form_conditions.addRow("Expansion Spec.", self.spec_combo)
+        form_conditions.addRow(self.lbl_exp, self.input_exp)
+        form_conditions.addRow(self.lbl_amb, self.input_ambient)
+        group_conditions.setLayout(form_conditions)
+        layout.addWidget(group_conditions)
+
+        # Species Database Selection
+        group_db = QGroupBox("Species Database Selection")
+        db_layout = QGridLayout()
+        self.check_nasa7 = QCheckBox("NASA-7")
+        self.check_nasa9 = QCheckBox("NASA-9")
+        self.check_janaf = QCheckBox("JANAF")
+        self.check_afcesic = QCheckBox("AFCESIC")
+        self.check_terra = QCheckBox("TERRA")
+
+        self.check_nasa7.setChecked(True)
+        self.check_nasa9.setChecked(True)
+        self.check_janaf.setChecked(False)
+        self.check_afcesic.setChecked(False)
+        self.check_terra.setChecked(True)
+
+        db_layout.addWidget(self.check_nasa7, 0, 0)
+        db_layout.addWidget(self.check_nasa9, 0, 1)
+        db_layout.addWidget(self.check_janaf, 0, 2)
+        db_layout.addWidget(self.check_afcesic, 1, 0)
+        db_layout.addWidget(self.check_terra, 1, 1)
+        group_db.setLayout(db_layout)
+        layout.addWidget(group_db)
+
+        # Solver Options
+        group_solver = QGroupBox("Solver Options")
+        solver_layout = QVBoxLayout()
+
+        solver_row = QHBoxLayout()
+        solver_row.addWidget(QLabel("Algorithm:"))
+        self.solver_combo = QComboBox()
+        self.solver_combo.addItem("Gordon-McBride", "gmcb")
+        self.solver_combo.addItem("Hybrid (MSS seed + G-McB)", "hybrid")
+        self.solver_combo.addItem("Major Species", "mss")
+        self.solver_combo.setToolTip(
+            "Gordon-McBride: fast single Newton loop (recommended).\n"
+            "Hybrid: seeds G-McB with a composition estimate from Major Species "
+            "\u2014 faster for multi-element propellants (CH\u2084/O\u2082, APCP).\n"
+            "Major Species: alternative Newton loop, slower but independent."
+        )
+        self.solver_combo.currentIndexChanged.connect(self._on_solver_changed)
+        solver_row.addWidget(self.solver_combo)
+        solver_layout.addLayout(solver_row)
+
+        max_atoms_row = QHBoxLayout()
+        max_atoms_row.addWidget(QLabel("Max product atoms:"))
+        self.spin_max_atoms = QSpinBox()
+        self.spin_max_atoms.setRange(3, 50)
+        self.spin_max_atoms.setValue(6)
+        self.spin_max_atoms.setToolTip(
+            "Maximum number of atoms in any product species.\n"
+            "Lower values run faster but exclude large molecules.\n"
+            "6 is correct for KNSB (K\u2082CO\u2083 = 6 atoms); raise if your\n"
+            "propellant requires larger species."
+        )
+        max_atoms_row.addWidget(self.spin_max_atoms)
+        solver_layout.addLayout(max_atoms_row)
+
+        group_solver.setLayout(solver_layout)
+        layout.addWidget(group_solver)
+
+        # Run controls
+        btn_row = QHBoxLayout()
+        self.btn_start = QPushButton("Start Optimization")
+        self.btn_start.setStyleSheet(
+            "background-color: #2a82da; font-weight: bold; height: 40px;"
+        )
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setEnabled(False)
+        self.btn_start.clicked.connect(
+            lambda: self.main_window.page_optimizer.start_optimization()
+        )
+        self.btn_cancel.clicked.connect(
+            lambda: self.main_window.page_optimizer.cancel_optimization()
+        )
+        btn_row.addWidget(self.btn_start, stretch=2)
+        btn_row.addWidget(self.btn_cancel, stretch=1)
+        layout.addLayout(btn_row)
+
+        self.btn_apply = QPushButton("Apply Best to Simulator")
+        self.btn_apply.setEnabled(False)
+        self.btn_apply.clicked.connect(
+            lambda: self.main_window.page_optimizer.apply_best_to_simulator()
+        )
+        layout.addWidget(self.btn_apply)
+
+        self.progress_label = QLabel("")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_label)
+        layout.addWidget(self.progress_bar)
+
+        layout.addStretch()
+        scroll_area.setWidget(dock_contents)
+        panel_layout.addWidget(scroll_area)
+
+        self.solver = self._make_solver()
+        self.refresh_pressure_labels()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _update_exp_label(self, text: str) -> None:
+        if "Area Ratio" in text:
+            self.lbl_exp.setText("Area Ratio")
+        else:
+            is_si = getattr(self.main_window, "current_units", "SI") == "SI"
+            p_unit = "MPa" if is_si else "PSI"
+            self.lbl_exp.setText(f"Exhaust Pressure ({p_unit})")
+
+    def _make_solver(self):
+        key = (
+            self.solver_combo.currentData() if hasattr(self, "solver_combo") else "gmcb"
+        )
+        if key == "hybrid":
+            return HybridSolver(capture_history=False)
+        if key == "mss":
+            return MajorSpeciesSolver(capture_history=False)
+        return GordonMcBrideSolver(capture_history=False)
+
+    def _on_solver_changed(self, _index: int) -> None:
+        self.solver = self._make_solver()
+
+    # ------------------------------------------------------------------
+    # Public API used by OptimizerPage
+    # ------------------------------------------------------------------
+
+    def get_enabled_databases(self) -> list[str]:
+        dbs = []
+        if self.check_nasa7.isChecked():
+            dbs.append("NASA-7")
+        if self.check_nasa9.isChecked():
+            dbs.append("NASA-9")
+        if self.check_janaf.isChecked():
+            dbs.append("JANAF")
+        if self.check_afcesic.isChecked():
+            dbs.append("AFCESIC")
+        if self.check_terra.isChecked():
+            dbs.append("TERRA")
+        return dbs
+
+    def _max_atoms(self) -> int:
+        return self.spin_max_atoms.value()
+
+    def _pressure_input_to_pa(self, value: float) -> float:
+        units = getattr(self.main_window, "current_units", "SI")
+        if units == "US":
+            return value * _PA_PER_PSI
+        return value * _PA_PER_MPA
+
+    def refresh_pressure_labels(self) -> None:
+        is_si = getattr(self.main_window, "current_units", "SI") == "SI"
+        p_unit = "MPa" if is_si else "PSI"
+        self.lbl_pc.setText(f"Chamber Pressure ({p_unit})")
+        self.lbl_amb.setText(f"Ambient Pressure ({p_unit})")
+        if "Area Ratio" in self.spec_combo.currentText():
+            self.lbl_exp.setText("Area Ratio")
+        else:
+            self.lbl_exp.setText(f"Exhaust Pressure ({p_unit})")
+
+
+# Backward-compat aliases so existing cross-file references (library.py,
+# optimizer.py, main_window.py) continue to resolve without changes.
+EngineDock = SimulatorPanel
+OptimizerDock = OptimizerPanel

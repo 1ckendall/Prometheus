@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "problem": {
+    "variables": [
+      {
+        "ingredient_id": "R45",
+        "minimum": 8.4,
+        "maximum": 15.6,
+        "pinned": false
+      },
+      {
+        "ingredient_id": "AMMONIUM_PERCHLORATE",
+        "minimum": 35.0,
+        "maximum": 65.0,
+        "pinned": false
+      },
+      {
+        "ingredient_id": "ALUMINUM_PURE_CRYSTALINE",
+        "minimum": 9.8,
+        "maximum": 18.2,
+        "pinned": false
+      },
+      {
+        "ingredient_id": "BISMUTH_TRIOXIDE",
+        "minimum": 14.000000000000002,
+        "maximum": 26.0,
+        "pinned": false
+      },
+      {
+        "ingredient_id": "MDI_143L",
+        "minimum": 2.8,
+        "maximum": 5.2,
+        "pinned": false
+      }
+    ],
+    "fixed_proportion_groups": [
+      {
+        "group_id": "Binder",
+        "members": [
+          "R45",
+          "MDI_143L"
+        ],
+        "ratios": [
+          0.12,
+          0.04
+        ]
+      }
+    ],
+    "sum_to_total_groups": [
+      {
+        "group_id": "Solid",
+        "members": [
+          "AMMONIUM_PERCHLORATE",
+          "ALUMINUM_PURE_CRYSTALINE",
+          "BISMUTH_TRIOXIDE"
+        ],
+        "maximum_total": 86.0
+      }
+    ],
+    "total_mass_fraction": 100.0
+  },
+  "objective": {
+    "isp_variant": "isp_actual",
+    "rho_exponent": 1.0
+  },
+  "operating_point": {
+    "chamber_pressure_pa": 6894757.0,
+    "expansion_type": "pressure",
+    "expansion_value": 101325.0,
+    "ambient_pressure_pa": 101325.0,
+    "shifting": true
+  },
+  "run": {
+    "n_starts": 12,
+    "max_iter_per_start": 10,
+    "fd_step": 0.0001,
+    "n_workers": 0,
+    "seed": 42
+  },
+  "solver": {
+    "type": "hybrid",
+    "enabled_databases": [
+      "NASA-7",
+      "NASA-9",
+      "TERRA"
+    ],
+    "max_atoms": 6
+  }
+}

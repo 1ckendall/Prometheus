@@ -18,4 +18,5 @@ class GraphCanvas(FigureCanvas):
         self.axes.set_ylabel(ylabel, color="white")
         self.axes.tick_params(colors="white")
         self.axes.grid(True, linestyle="--", alpha=0.3)
+        fig.tight_layout()
         self.draw()

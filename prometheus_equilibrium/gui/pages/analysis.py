@@ -135,7 +135,7 @@ class AnalysisPage(QWidget):
         canvas.axes.set_ylabel(
             ylabel if ylabel is not None else canvas.ylabel_text, color="white"
         )
-        canvas.axes.tick_params(colors="white")
+        canvas.axes.tick_params(colors="white", labelbottom=True, labelleft=True)
         canvas.axes.grid(True, linestyle="--", alpha=0.3)
 
     def _placeholder(self, canvas, message):

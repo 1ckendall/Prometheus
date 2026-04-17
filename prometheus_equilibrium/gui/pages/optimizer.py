@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from loguru import logger
 from PySide6.QtCore import Qt, QThread, Signal
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from prometheus_equilibrium.gui.engine import OptimizerPanel
 from prometheus_equilibrium.gui.widgets.graph_canvas import GraphCanvas
 from prometheus_equilibrium.optimization import (
     FixedProportionGroup,
@@ -106,6 +109,7 @@ class OptimizerPage(QWidget):
 
         layout = QVBoxLayout(self)
 
+        # Left: scrollable page content. Right: optimizer configuration dock.
         scroll_area = QScrollArea(self)
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -120,7 +124,18 @@ class OptimizerPage(QWidget):
         content_layout.addStretch()
 
         scroll_area.setWidget(content)
-        layout.addWidget(scroll_area)
+
+        # Right-hand dock for optimizer-specific engine settings
+        self.config_panel = OptimizerPanel(main_window)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(scroll_area)
+        splitter.addWidget(self.config_panel)
+        self.config_panel.setMinimumWidth(320)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+
+        layout.addWidget(splitter)
 
     def _build_controls_group(self) -> QGroupBox:
         group = QGroupBox("Objective and Run Controls")
@@ -546,7 +561,7 @@ class OptimizerPage(QWidget):
             rho_exponent=float(self.spin_rho_exp.value()),
         )
 
-        ed = self.main_window.engine_dock
+        ed = self.config_panel
         chamber_pressure_pa = ed._pressure_input_to_pa(float(ed.input_pc.text()))
         is_pressure = "Pressure" in ed.spec_combo.currentText()
         expansion_value = float(ed.input_exp.text())
@@ -586,6 +601,11 @@ class OptimizerPage(QWidget):
     # Config save / load
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_optimizer_config_path(path: Path) -> bool:
+        """Return True if path uses the canonical optimizer-config extension."""
+        return str(path).lower().endswith(".prop-opt.json")
+
     def _collect_config(self) -> dict:
         """Collect the full optimizer config as a JSON-serialisable dict.
 
@@ -596,7 +616,7 @@ class OptimizerPage(QWidget):
             Exception: If the current setup cannot be serialised (e.g. validation error).
         """
         optimizer, run_cfg = self._collect_optimizer()
-        ed = self.main_window.engine_dock
+        ed = self.config_panel
         solver_type = "gmcb"
         if hasattr(ed, "solver_combo"):
             solver_type = ed.solver_combo.currentData() or "gmcb"
@@ -626,33 +646,52 @@ class OptimizerPage(QWidget):
             return
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Optimizer Config", "", "JSON Files (*.json);;All Files (*)"
+            self,
+            "Save Optimizer Config",
+            "",
+            "Optimizer Config (*.prop-opt.json);;All Files (*)",
         )
         if not path:
             return
+
+        save_path = Path(path)
+        if not self._is_optimizer_config_path(save_path):
+            save_path = Path(f"{save_path}.prop-opt.json")
 
         from prometheus_equilibrium.optimization.config import save_json
 
         try:
-            save_json(path, config)
+            save_json(str(save_path), config)
         except OSError as exc:
             QMessageBox.critical(self, "Save Failed", str(exc))
             return
 
-        self.output.setText(f"Config saved to:\n{path}")
+        self.output.setText(f"Config saved to:\n{save_path}")
 
     def load_config_dialog(self) -> None:
         """Prompt for a config JSON file and populate the optimizer page from it."""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Optimizer Config", "", "JSON Files (*.json);;All Files (*)"
+            self,
+            "Load Optimizer Config",
+            "",
+            "Optimizer Config (*.prop-opt.json);;All Files (*)",
         )
         if not path:
+            return
+
+        load_path = Path(path)
+        if not self._is_optimizer_config_path(load_path):
+            QMessageBox.critical(
+                self,
+                "Load Failed",
+                "Optimizer config files must use the .prop-opt.json extension.",
+            )
             return
 
         import json
 
         try:
-            with open(path, encoding="utf-8") as f:
+            with open(load_path, encoding="utf-8") as f:
                 config = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
             QMessageBox.critical(self, "Load Failed", str(exc))
@@ -664,7 +703,7 @@ class OptimizerPage(QWidget):
             QMessageBox.critical(self, "Config Error", str(exc))
             return
 
-        self.output.setText(f"Config loaded from:\n{path}")
+        self.output.setText(f"Config loaded from:\n{load_path}")
 
     # Backward-compatible aliases for any existing signal wiring.
     def _save_config(self) -> None:
@@ -836,6 +875,7 @@ class OptimizerPage(QWidget):
         n_starts = int(payload.get("n_starts", self.progress.maximum()))
         objective_value = payload.get("objective_value")
         start_trace = payload.get("start_trace")
+        infeasible_trace_points = payload.get("infeasible_trace_points")
         best = payload.get("best_value")
         converged = payload.get("converged", False)
         # Progress advances by completed starts; parallel mode may send out of order.
@@ -858,13 +898,16 @@ class OptimizerPage(QWidget):
                 + ("converged" if converged else "failed")
             )
             return
+        infeasible_suffix = ""
+        if isinstance(infeasible_trace_points, int) and infeasible_trace_points > 0:
+            infeasible_suffix = f", infeasible trace points = {infeasible_trace_points}"
         if not self._live_history or self._live_history[-1][0] != start:
             self._live_history.append((start, float(best)))
         self.progress_label.setText(
             f"Start {start + 1}/{n_starts}: "
-            f"objective = {float(objective_value):.6f}, best = {best:.6f}"
+            f"objective = {float(objective_value):.6f}, best = {best:.6f}{infeasible_suffix}"
             if objective_value is not None
-            else f"Start {start + 1}/{n_starts}: best log FoM = {best:.6f}"
+            else f"Start {start + 1}/{n_starts}: best log FoM = {best:.6f}{infeasible_suffix}"
         )
 
     def _on_finished(self, result) -> None:

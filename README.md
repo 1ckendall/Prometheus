@@ -126,7 +126,13 @@ Launch the desktop GUI:
 uv run prometheus-gui
 ```
 
-For a longer walkthrough, open [`demonstration.ipynb`](demonstration.ipynb).
+### GUI File Formats (Breaking Change)
+
+- Composition snapshots now use `*.prop.json` (previously `*.prop`).
+- Optimizer configs now use `*.prop-opt.json` (previously generic `*.json`).
+
+The GUI enforces these extensions when saving/loading via the File menu.
+
 
 ## Propellant Database
 

@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from prometheus_equilibrium.gui.engine import EngineDock
 from prometheus_equilibrium.gui.pages.analysis import AnalysisPage
 from prometheus_equilibrium.gui.pages.library import LibraryPage
 from prometheus_equilibrium.gui.pages.optimizer import OptimizerPage
@@ -28,7 +27,6 @@ class PrometheusGUI(QMainWindow):
 
         self.prop_db = prop_db
         self.spec_db = spec_db
-
         self.current_units = "SI"
 
         self.create_menu_bar()
@@ -41,7 +39,6 @@ class PrometheusGUI(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. Left Navigation Rail
         self.nav_rail = QListWidget()
         self.nav_rail.setFixedWidth(100)
         self.nav_rail.setSpacing(10)
@@ -53,25 +50,23 @@ class PrometheusGUI(QMainWindow):
         self.nav_rail.addItem("Library")
         for i in range(self.nav_rail.count()):
             item = self.nav_rail.item(i)
-            item.setTextAlignment(Qt.AlignCenter)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             item.setSizeHint(QSize(100, 80))
 
         self.nav_rail.currentRowChanged.connect(self.switch_nav_page)
         main_layout.addWidget(self.nav_rail)
 
-        # 2. Central Content Stack
         self.content_stack = QStackedWidget()
         main_layout.addWidget(self.content_stack)
 
-        # 3. Engine Dock (Initialize early so pages can access it)
-        self.engine_dock = EngineDock(self)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.engine_dock)
-
-        # 4. Pages
         self.page_simulator = SimulatorPage(self, self.prop_db)
         self.page_optimizer = OptimizerPage(self, self.prop_db)
         self.page_analysis = AnalysisPage(self)
         self.page_library = LibraryPage(self, self.prop_db, self.spec_db)
+
+        # Compat aliases used by library.py, optimizer.py, and change_units.
+        self.engine_dock = self.page_simulator.config_panel
+        self.optimizer_dock = self.page_optimizer.config_panel
 
         self.content_stack.addWidget(self.page_simulator)
         self.content_stack.addWidget(self.page_optimizer)
@@ -87,7 +82,7 @@ class PrometheusGUI(QMainWindow):
 
         self.nav_rail.setCurrentRow(0)
 
-    def switch_nav_page(self, index):
+    def switch_nav_page(self, index: int) -> None:
         self.content_stack.setCurrentIndex(index)
 
     def _focus_simulator(self, simulator_tab_index: int | None = None):
@@ -95,6 +90,10 @@ class PrometheusGUI(QMainWindow):
         self.nav_rail.setCurrentRow(0)
         if simulator_tab_index is not None:
             self.page_simulator.sim_tabs.setCurrentIndex(simulator_tab_index)
+
+    def _focus_optimizer(self):
+        """Show the Optimizer page."""
+        self.nav_rail.setCurrentRow(1)
 
     def create_menu_bar(self):
         menubar = self.menuBar()
@@ -113,8 +112,6 @@ class PrometheusGUI(QMainWindow):
         menu_file.addAction("Export Results...", self.export_results)
 
         menu_options = menubar.addMenu("Options")
-
-        # Unit System
         units_menu = menu_options.addMenu("Select Unit System")
         action_si = units_menu.addAction("SI (Default)")
         action_si.setCheckable(True)
@@ -138,25 +135,20 @@ class PrometheusGUI(QMainWindow):
             return default
 
     @staticmethod
+    def _is_prop_json_path(path: Path) -> bool:
+        """Return True if path uses the canonical composition extension."""
+        return [part.lower() for part in path.suffixes[-2:]] == [".prop", ".json"]
+
+    @staticmethod
     def _format_pressure(value: float) -> str:
         """Format pressure values with fixed precision so decimals are preserved."""
         return f"{value:.6f}"
 
-    def change_units(self, system):
+    def change_units(self, system: str) -> None:
+        """Switch UI unit system and convert pressure fields in-place."""
         if system == self.current_units:
             return
 
-        # Access engine dock state
-        ed = self.engine_dock
-        pc = self._safe_float(ed.input_pc.text())
-        pc_min = self._safe_float(ed.input_pc_min.text())
-        pc_max = self._safe_float(ed.input_pc_max.text())
-
-        is_pressure = "Pressure" in ed.spec_combo.currentText()
-        exp_val = self._safe_float(ed.input_exp.text())
-        ambient_val = self._safe_float(ed.input_ambient.text())
-
-        # Convert only when pressure units are changing; area-ratio input is unitless.
         si_to_us = (self.current_units == "SI") and (system == "US")
         us_to_si = (self.current_units == "US") and (system == "SI")
 
@@ -167,44 +159,55 @@ class PrometheusGUI(QMainWindow):
         else:
             pressure_factor = 1.0
 
-        if system == "SI":
-            ed.input_pc.setText(self._format_pressure(pc * pressure_factor))
-            ed.input_pc_min.setText(self._format_pressure(pc_min * pressure_factor))
-            ed.input_pc_max.setText(self._format_pressure(pc_max * pressure_factor))
-            ed.input_ambient.setText(
-                self._format_pressure(ambient_val * pressure_factor)
-            )
-            if is_pressure:
-                ed.input_exp.setText(self._format_pressure(exp_val * pressure_factor))
-        elif system == "US":
-            ed.input_pc.setText(self._format_pressure(pc * pressure_factor))
-            ed.input_pc_min.setText(self._format_pressure(pc_min * pressure_factor))
-            ed.input_pc_max.setText(self._format_pressure(pc_max * pressure_factor))
-            ed.input_ambient.setText(
-                self._format_pressure(ambient_val * pressure_factor)
-            )
-            if is_pressure:
-                ed.input_exp.setText(self._format_pressure(exp_val * pressure_factor))
+        # Convert simulator dock fields
+        ed = self.engine_dock
+        pc = self._safe_float(ed.input_pc.text())
+        pc_min = self._safe_float(ed.input_pc_min.text())
+        pc_max = self._safe_float(ed.input_pc_max.text())
+        ed_is_pressure = "Pressure" in ed.spec_combo.currentText()
+        ed_exp_val = self._safe_float(ed.input_exp.text())
+        ed_ambient = self._safe_float(ed.input_ambient.text())
+
+        ed.input_pc.setText(self._format_pressure(pc * pressure_factor))
+        ed.input_pc_min.setText(self._format_pressure(pc_min * pressure_factor))
+        ed.input_pc_max.setText(self._format_pressure(pc_max * pressure_factor))
+        ed.input_ambient.setText(self._format_pressure(ed_ambient * pressure_factor))
+        if ed_is_pressure:
+            ed.input_exp.setText(self._format_pressure(ed_exp_val * pressure_factor))
+
+        # Convert optimizer dock fields
+        od = self.optimizer_dock
+        od_pc = self._safe_float(od.input_pc.text())
+        od_is_pressure = "Pressure" in od.spec_combo.currentText()
+        od_exp_val = self._safe_float(od.input_exp.text())
+        od_ambient = self._safe_float(od.input_ambient.text())
+
+        od.input_pc.setText(self._format_pressure(od_pc * pressure_factor))
+        od.input_ambient.setText(self._format_pressure(od_ambient * pressure_factor))
+        if od_is_pressure:
+            od.input_exp.setText(self._format_pressure(od_exp_val * pressure_factor))
 
         self.current_units = system
-        if hasattr(ed, "refresh_pressure_labels"):
-            ed.refresh_pressure_labels()
+
+        ed.refresh_pressure_labels()
+        od.refresh_pressure_labels()
         if hasattr(ed, "refresh_report_for_units"):
             ed.refresh_report_for_units()
-        self.statusBar().showMessage(
-            f"Unit system changed to {self.current_units}", 3000
-        )
+
+        self.statusBar().showMessage(f"Unit system changed to {system}", 3000)
 
     def load_composition(self):
         file_name, _ = QFileDialog.getOpenFileName(
-            self, "Load Composition", "", "Propellant Files (*.prop);;All Files (*)"
+            self,
+            "Load Composition",
+            "",
+            "Propellant Files (*.prop.json);;All Files (*)",
         )
         if not file_name:
             return
-
-        if Path(file_name).suffix.lower() != ".prop":
+        if not self._is_prop_json_path(Path(file_name)):
             self.statusBar().showMessage(
-                "Load failed: composition files must use the .prop extension.",
+                "Load failed: composition files must use the .prop.json extension.",
                 8000,
             )
             return
@@ -224,14 +227,20 @@ class PrometheusGUI(QMainWindow):
 
     def save_composition(self):
         file_name, _ = QFileDialog.getSaveFileName(
-            self, "Save Composition As", "", "Propellant Files (*.prop);;All Files (*)"
+            self,
+            "Save Composition As",
+            "",
+            "Propellant Files (*.prop.json);;All Files (*)",
         )
         if not file_name:
             return
 
         save_path = Path(file_name)
-        if save_path.suffix.lower() != ".prop":
-            save_path = save_path.with_suffix(".prop")
+        if not self._is_prop_json_path(save_path):
+            base = save_path
+            while base.suffix:
+                base = base.with_suffix("")
+            save_path = Path(f"{base}.prop.json")
 
         try:
             payload = self.page_simulator.composition_snapshot()
@@ -246,7 +255,10 @@ class PrometheusGUI(QMainWindow):
 
     def export_results(self):
         file_name, _ = QFileDialog.getSaveFileName(
-            self, "Export Results", "", "CSV Files (*.csv);;All Files (*)"
+            self,
+            "Export Results",
+            "",
+            "CSV Files (*.csv);;All Files (*)",
         )
         if file_name:
             self.statusBar().showMessage(f"Exported: {file_name}", 3000)

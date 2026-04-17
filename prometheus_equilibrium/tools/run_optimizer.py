@@ -6,10 +6,10 @@ JSON to stdout or to a file.
 
 Usage::
 
-    prometheus-optimize config.json
-    prometheus-optimize config.json --output results.json
-    prometheus-optimize config.json --thermo-dir /path/to/thermo --prop-db /path/to/propellants.toml
-    prometheus-optimize config.json --n-starts 8 --max-iter 20 --seed 0   # CLI overrides
+    prometheus-optimize config.prop-opt.json
+    prometheus-optimize config.prop-opt.json --output results.json
+    prometheus-optimize config.prop-opt.json --thermo-dir /path/to/thermo --prop-db /path/to/propellants.toml
+    prometheus-optimize config.prop-opt.json --n-starts 8 --max-iter 20 --seed 0   # CLI overrides
 """
 
 from __future__ import annotations
@@ -205,7 +205,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="prometheus-optimize",
         description="Run a Prometheus gradient optimizer headlessly from a config file.",
     )
-    parser.add_argument("config", help="Path to optimizer config JSON file.")
+    parser.add_argument(
+        "config", help="Path to optimizer config (.prop-opt.json) file."
+    )
     parser.add_argument(
         "--output",
         "-o",
@@ -265,6 +267,9 @@ def main() -> None:
     """Entry point for ``prometheus-optimize``."""
     parser = _build_parser()
     args = parser.parse_args()
+
+    if not str(args.config).lower().endswith(".prop-opt.json"):
+        parser.error("config file must use the .prop-opt.json extension")
 
     with open(args.config, encoding="utf-8") as f:
         config = json.load(f)

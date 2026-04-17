@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "propellant_type": "solid",
+  "components": [
+    {
+      "name": "POTASSIUM_NITRATE",
+      "mass_fraction": 65.0
+    },
+    {
+      "name": "SORBITOL",
+      "mass_fraction": 35.0
+    }
+  ]
+}

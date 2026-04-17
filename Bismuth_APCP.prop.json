@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "propellant_type": "solid",
+  "components": [
+    {
+      "name": "R45",
+      "mass_fraction": 12.0
+    },
+    {
+      "name": "AMMONIUM_PERCHLORATE",
+      "mass_fraction": 50.0
+    },
+    {
+      "name": "ALUMINUM_PURE_CRYSTALINE",
+      "mass_fraction": 14.0
+    },
+    {
+      "name": "BISMUTH_TRIOXIDE",
+      "mass_fraction": 20.0
+    },
+    {
+      "name": "MDI_143L",
+      "mass_fraction": 4.0
+    }
+  ]
+}

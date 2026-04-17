@@ -63,23 +63,23 @@ def evaluate_composition(
 
     try:
         if operating_point.expansion_type == "pressure":
-            pair = perf_solver.solve_pair(
+            perf = perf_solver.solve(
                 eq_problem,
                 pe_pa=operating_point.expansion_value,
+                shifting=operating_point.shifting,
                 ambient_pressure=operating_point.ambient_pressure_pa,
                 compute_profile=False,
             )
         else:
-            pair = perf_solver.solve_pair(
+            perf = perf_solver.solve(
                 eq_problem,
                 area_ratio=operating_point.expansion_value,
+                shifting=operating_point.shifting,
                 ambient_pressure=operating_point.ambient_pressure_pa,
                 compute_profile=False,
             )
     except RuntimeError as exc:
         raise ValueError(str(exc)) from exc
-
-    perf = pair.shifting if operating_point.shifting else pair.frozen
     isp = float(getattr(perf, objective.isp_variant))
     if isp <= 0.0:
         raise ValueError("Isp is non-positive.")

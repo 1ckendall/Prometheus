@@ -23,7 +23,9 @@ parameters.  On Windows the ``spawn`` start method is used automatically.
 from __future__ import annotations
 
 import math
+import multiprocessing as mp
 import os
+import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Callable
 
@@ -44,6 +46,8 @@ from .problem import (
     validate_operating_point,
 )
 
+_TRACE_FEASIBILITY_TOL = 1e-8
+
 # Penalty returned when the equilibrium solver fails at a trial point.
 _PENALTY = 1e6
 
@@ -54,9 +58,10 @@ _PENALTY = 1e6
 _W_PROP_DB = None
 _W_SPEC_DB = None
 _W_PERF_SOLVER = None
+_W_PROGRESS_QUEUE = None
 
 
-def _worker_init(prop_db, spec_db, solver) -> None:
+def _worker_init(prop_db, spec_db, solver, progress_queue=None) -> None:
     """Initialise shared state in each worker process.
 
     Called once per worker process by :class:`~concurrent.futures.ProcessPoolExecutor`
@@ -66,16 +71,20 @@ def _worker_init(prop_db, spec_db, solver) -> None:
         prop_db: Loaded :class:`~prometheus_equilibrium.propellants.PropellantDatabase`.
         spec_db: Loaded :class:`~prometheus_equilibrium.equilibrium.species.SpeciesDatabase`.
         solver: Equilibrium solver instance.
+        progress_queue: Optional :class:`multiprocessing.Queue` for streaming
+            per-iteration trace points back to the main process.
     """
-    global _W_PROP_DB, _W_SPEC_DB, _W_PERF_SOLVER
+    global _W_PROP_DB, _W_SPEC_DB, _W_PERF_SOLVER, _W_PROGRESS_QUEUE
     # Keep spawned worker processes quiet during GUI optimization runs.
     logger.disable("prometheus_equilibrium.equilibrium")
     _W_PROP_DB = prop_db
     _W_SPEC_DB = spec_db
     _W_PERF_SOLVER = PerformanceSolver(solver, db=spec_db)
+    _W_PROGRESS_QUEUE = progress_queue
 
 
 def _worker_run_start(
+    start_idx: int,
     x0: np.ndarray,
     problem: OptimizationProblem,
     objective: ObjectiveSpec,
@@ -90,6 +99,7 @@ def _worker_run_start(
     Uses the module-level ``_W_*`` globals populated by :func:`_worker_init`.
 
     Args:
+        start_idx: Index of this start (used to tag progress queue messages).
         x0: Starting composition vector (0–1 mass fractions).
         problem: Validated optimization problem.
         objective: Isp variant and density exponent.
@@ -103,6 +113,16 @@ def _worker_run_start(
         Dict with ``worker_id`` and ``result`` keys where ``result`` is
         ``(log_fom, fom, isp, density, composition)`` on success or ``None``.
     """
+    per_iter_cb = None
+    if _W_PROGRESS_QUEUE is not None:
+        _q = _W_PROGRESS_QUEUE
+
+        def per_iter_cb(sidx: int, trace: list) -> None:
+            try:
+                _q.put_nowait({"start": sidx, "trace": list(trace)})
+            except Exception:
+                pass
+
     result = _run_single_start(
         x0,
         problem,
@@ -115,6 +135,8 @@ def _worker_run_start(
         _W_PROP_DB,
         _W_SPEC_DB,
         _W_PERF_SOLVER,
+        start_idx=start_idx,
+        per_iter_callback=per_iter_cb,
     )
     return {
         "worker_id": f"pid-{os.getpid()}",
@@ -280,8 +302,19 @@ def _run_single_start(
     prop_db,
     spec_db,
     perf_solver,
+    start_idx: int | None = None,
+    per_iter_callback: Callable[[int, list], None] | None = None,
 ) -> (
-    tuple[float, float, float, float, dict[str, float], list[tuple[int, float]]] | None
+    tuple[
+        float,
+        float,
+        float,
+        float,
+        dict[str, float],
+        list[tuple[int, float]],
+        list[dict[str, object]],
+    ]
+    | None
 ):
     """Run one SLSQP solve from ``x0`` using the supplied solver state.
 
@@ -300,11 +333,14 @@ def _run_single_start(
         prop_db: Loaded propellant database.
         spec_db: Loaded species database.
         perf_solver: Performance solver instance.
+        start_idx: Index of this start, forwarded to ``per_iter_callback``.
+        per_iter_callback: Optional ``(start_idx, trace_so_far)`` callable
+            invoked after each SLSQP iteration to stream intermediate results.
 
     Returns:
-        Tuple ``(log_fom, fom, isp, density, composition, trace)`` if feasible,
-        ``None`` if the solver fails or the composition yields an invalid
-        objective.
+        Tuple ``(log_fom, fom, isp, density, composition, trace, trace_meta)``
+        if feasible, ``None`` if the solver fails or the composition yields an
+        invalid objective.
     """
     bounds = _build_scipy_bounds(problem)
     constraints = _build_scipy_constraints(problem)
@@ -345,14 +381,33 @@ def _run_single_start(
             return None
 
     trace: list[tuple[int, float]] = []
-    initial_log_fom = _log_fom_from_x(x0)
-    if initial_log_fom is not None:
-        trace.append((0, float(initial_log_fom)))
+    trace_meta: list[dict[str, object]] = []
+
+    def _append_trace_point(x: np.ndarray, iteration: int) -> None:
+        log_fom = _log_fom_from_x(x)
+        if log_fom is None:
+            return
+        trace.append((iteration, float(log_fom)))
+        diagnostics = _constraint_diagnostics(
+            x,
+            problem,
+            var_ids,
+            feasibility_tol=_TRACE_FEASIBILITY_TOL,
+        )
+        trace_meta.append(
+            {
+                "iter": iteration,
+                "log_fom": float(log_fom),
+                **diagnostics,
+            }
+        )
+        if per_iter_callback is not None and start_idx is not None:
+            per_iter_callback(start_idx, list(trace))
+
+    _append_trace_point(x0, iteration=0)
 
     def _callback(xk: np.ndarray) -> None:
-        log_fom = _log_fom_from_x(xk)
-        if log_fom is not None:
-            trace.append((len(trace), float(log_fom)))
+        _append_trace_point(xk, iteration=len(trace))
 
     res = minimize(
         _obj,
@@ -363,7 +418,7 @@ def _run_single_start(
         callback=_callback,
         options={
             "maxiter": max_iter,
-            "ftol": 1e-9,
+            "ftol": 1e-6,
             "eps": fd_step,
             "disp": False,
         },
@@ -386,9 +441,67 @@ def _run_single_start(
     except (ValueError, RuntimeError):
         return None
     if not trace or trace[-1][1] != float(log_fom):
-        trace.append((len(trace), float(log_fom)))
+        _append_trace_point(x_opt, iteration=len(trace))
 
-    return log_fom, fom, isp, density, composition, trace
+    return log_fom, fom, isp, density, composition, trace, trace_meta
+
+
+def _constraint_diagnostics(
+    x: np.ndarray,
+    problem: OptimizationProblem,
+    var_ids: list[str],
+    feasibility_tol: float,
+) -> dict[str, object]:
+    """Compute constraint residual diagnostics for one trace point.
+
+    Args:
+        x: Composition vector aligned with ``var_ids``.
+        problem: Constraint definition for this optimization run.
+        var_ids: Ingredient IDs aligned with ``x``.
+        feasibility_tol: Tolerance used to classify feasibility.
+
+    Returns:
+        Dict with aggregate and per-constraint residual information.
+    """
+    idx = {vid: i for i, vid in enumerate(var_ids)}
+    sum_x = float(np.sum(x))
+
+    eq_residuals: dict[str, float] = {
+        "mass_balance": sum_x - float(problem.total_mass_fraction)
+    }
+    for group in problem.fixed_proportion_groups:
+        ratios_sum = sum(group.ratios)
+        alphas = [r / ratios_sum for r in group.ratios]
+        i0 = idx[group.members[0]]
+        a0 = alphas[0]
+        for k in range(1, len(group.members)):
+            ik = idx[group.members[k]]
+            ak = alphas[k]
+            eq_residuals[
+                f"fixed:{group.group_id}:{group.members[0]}:{group.members[k]}"
+            ] = (float(x[i0]) * ak - float(x[ik]) * a0)
+
+    ineq_residuals: dict[str, float] = {}
+    for group in problem.sum_to_total_groups:
+        group_sum = sum(float(x[idx[m]]) for m in group.members)
+        low, high = group.total_bounds()
+        ineq_residuals[f"sum_upper:{group.group_id}"] = high - group_sum
+        if low > 1e-12:
+            ineq_residuals[f"sum_lower:{group.group_id}"] = group_sum - low
+
+    max_abs_eq = max(abs(v) for v in eq_residuals.values()) if eq_residuals else 0.0
+    min_ineq = min(ineq_residuals.values()) if ineq_residuals else float("inf")
+
+    return {
+        "sum_x": sum_x,
+        "eq_residuals": eq_residuals,
+        "ineq_residuals": ineq_residuals,
+        "max_abs_eq_residual": max_abs_eq,
+        "min_ineq_residual": min_ineq,
+        "is_feasible": bool(
+            max_abs_eq <= feasibility_tol and min_ineq >= -feasibility_tol
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +617,7 @@ class MultiStartGradientOptimizer:
         best_composition: dict[str, float] = {}
         trial_history: list[tuple[int, float]] = []
         start_history: dict[int, list[tuple[int, float]]] = {}
+        start_history_meta: dict[int, list[dict[str, object]]] = {}
         completed = 0
         failed = 0
 
@@ -512,6 +626,31 @@ class MultiStartGradientOptimizer:
             for start_idx, x0 in enumerate(x0s):
                 if should_stop is not None and should_stop():
                     break
+
+                _cb = progress_callback
+                _sidx = start_idx
+                _n = n_starts
+
+                def _seq_iter_cb(
+                    sidx: int,
+                    trace: list,
+                    _cb=_cb,
+                    _n=_n,
+                ) -> None:
+                    if _cb is not None:
+                        _cb(
+                            {
+                                "start": sidx,
+                                "n_starts": _n,
+                                "partial": True,
+                                "start_trace": trace,
+                                "converged": False,
+                                "objective_value": None,
+                                "best_value": None,
+                                "isp": None,
+                            }
+                        )
+
                 result = _run_single_start(
                     x0,
                     self.problem,
@@ -524,6 +663,10 @@ class MultiStartGradientOptimizer:
                     self.prop_db,
                     self.spec_db,
                     self._perf_solver,
+                    start_idx=_sidx,
+                    per_iter_callback=(
+                        _seq_iter_cb if progress_callback is not None else None
+                    ),
                 )
                 (
                     best_log_fom,
@@ -533,6 +676,7 @@ class MultiStartGradientOptimizer:
                     best_composition,
                     trial_history,
                     start_history,
+                    start_history_meta,
                     completed,
                     failed,
                 ) = _record_start(
@@ -545,6 +689,7 @@ class MultiStartGradientOptimizer:
                     best_composition,
                     trial_history,
                     start_history,
+                    start_history_meta,
                     completed,
                     failed,
                     n_starts,
@@ -552,66 +697,99 @@ class MultiStartGradientOptimizer:
                 )
         else:
             # ---- Parallel path ----
-            with ProcessPoolExecutor(
-                max_workers=effective,
-                initializer=_worker_init,
-                initargs=(self.prop_db, self.spec_db, self.solver),
-            ) as pool:
-                futures = {
-                    pool.submit(
-                        _worker_run_start,
-                        x0,
-                        self.problem,
-                        self.objective,
-                        self.operating_point,
-                        self.enabled_databases,
-                        self.max_atoms,
-                        max_iter_per_start,
-                        fd_step,
-                    ): i
-                    for i, x0 in enumerate(x0s)
-                }
-                pending = set(futures)
-                for fut in as_completed(futures):
-                    pending.discard(fut)
-                    start_idx = futures[fut]
+            iter_queue: mp.Queue = mp.Queue()
+            stop_drain = threading.Event()
+
+            def _drain_loop() -> None:
+                while not stop_drain.is_set():
                     try:
-                        payload = fut.result()
-                        if isinstance(payload, dict):
-                            result = payload.get("result")
-                        else:
-                            result = None
+                        msg = iter_queue.get(timeout=0.05)
+                        if progress_callback is not None:
+                            progress_callback(
+                                {
+                                    "start": msg["start"],
+                                    "n_starts": n_starts,
+                                    "partial": True,
+                                    "start_trace": msg["trace"],
+                                    "converged": False,
+                                    "objective_value": None,
+                                    "best_value": None,
+                                    "isp": None,
+                                }
+                            )
                     except Exception:
-                        result = None
-                    (
-                        best_log_fom,
-                        best_fom,
-                        best_isp,
-                        best_density,
-                        best_composition,
-                        trial_history,
-                        start_history,
-                        completed,
-                        failed,
-                    ) = _record_start(
-                        start_idx,
-                        result,
-                        best_log_fom,
-                        best_fom,
-                        best_isp,
-                        best_density,
-                        best_composition,
-                        trial_history,
-                        start_history,
-                        completed,
-                        failed,
-                        n_starts,
-                        progress_callback,
-                    )
-                    if should_stop is not None and should_stop():
-                        for p in pending:
-                            p.cancel()
-                        break
+                        pass
+
+            drain_thread = threading.Thread(target=_drain_loop, daemon=True)
+            drain_thread.start()
+
+            try:
+                with ProcessPoolExecutor(
+                    max_workers=effective,
+                    initializer=_worker_init,
+                    initargs=(self.prop_db, self.spec_db, self.solver, iter_queue),
+                ) as pool:
+                    futures = {
+                        pool.submit(
+                            _worker_run_start,
+                            i,
+                            x0,
+                            self.problem,
+                            self.objective,
+                            self.operating_point,
+                            self.enabled_databases,
+                            self.max_atoms,
+                            max_iter_per_start,
+                            fd_step,
+                        ): i
+                        for i, x0 in enumerate(x0s)
+                    }
+                    pending = set(futures)
+                    for fut in as_completed(futures):
+                        pending.discard(fut)
+                        start_idx = futures[fut]
+                        try:
+                            payload = fut.result()
+                            if isinstance(payload, dict):
+                                result = payload.get("result")
+                            else:
+                                result = None
+                        except Exception:
+                            result = None
+                        (
+                            best_log_fom,
+                            best_fom,
+                            best_isp,
+                            best_density,
+                            best_composition,
+                            trial_history,
+                            start_history,
+                            start_history_meta,
+                            completed,
+                            failed,
+                        ) = _record_start(
+                            start_idx,
+                            result,
+                            best_log_fom,
+                            best_fom,
+                            best_isp,
+                            best_density,
+                            best_composition,
+                            trial_history,
+                            start_history,
+                            start_history_meta,
+                            completed,
+                            failed,
+                            n_starts,
+                            progress_callback,
+                        )
+                        if should_stop is not None and should_stop():
+                            for p in pending:
+                                p.cancel()
+                            break
+            finally:
+                stop_drain.set()
+                drain_thread.join(timeout=1.0)
 
         if completed == 0:
             raise RuntimeError(f"No feasible result from any of the {n_starts} starts.")
@@ -624,6 +802,7 @@ class MultiStartGradientOptimizer:
             best_density=best_density,
             trial_history=trial_history,
             start_history=start_history,
+            start_history_meta=start_history_meta,
             completed_trials=completed,
             pruned_trials=failed,
         )
@@ -675,6 +854,7 @@ def _record_start(
     best_composition: dict,
     trial_history: list,
     start_history: dict[int, list[tuple[int, float]]],
+    start_history_meta: dict[int, list[dict[str, object]]],
     completed: int,
     failed: int,
     n_starts: int,
@@ -692,6 +872,7 @@ def _record_start(
         best_composition: Best composition dict seen so far.
         trial_history: Accumulated ``(start_idx, best_log_fom)`` list.
         start_history: Accumulated ``start_idx -> [(iter_idx, log_fom)]`` map.
+        start_history_meta: Accumulated per-iteration constraint diagnostics.
         completed: Count of successful starts so far.
         failed: Count of failed starts so far.
         n_starts: Total starts requested (for callback).
@@ -700,21 +881,23 @@ def _record_start(
     Returns:
         Updated tuple
         ``(best_log_fom, best_fom, best_isp, best_density, best_composition,
-        trial_history, start_history, completed, failed)``.
+        trial_history, start_history, start_history_meta, completed, failed)``.
     """
     objective_value = None
     start_trace = None
+    start_trace_meta = None
     if result is None:
         failed += 1
         converged = False
         isp_report = None
     else:
-        log_fom, fom, isp, density, composition, trace = result
+        log_fom, fom, isp, density, composition, trace, trace_meta = result
         completed += 1
         converged = True
         isp_report = isp
         objective_value = log_fom
         start_trace = list(trace)
+        start_trace_meta = list(trace_meta)
         if log_fom > best_log_fom:
             best_log_fom = log_fom
             best_fom = fom
@@ -723,14 +906,24 @@ def _record_start(
             best_composition = composition
         trial_history.append((start_idx, best_log_fom))
         start_history[start_idx] = start_trace
+        start_history_meta[start_idx] = start_trace_meta
 
     if progress_callback is not None:
+        infeasible_points = None
+        if isinstance(start_trace_meta, list):
+            infeasible_points = sum(
+                1
+                for point in start_trace_meta
+                if not bool(point.get("is_feasible", False))
+            )
         progress_callback(
             {
                 "start": start_idx,
                 "converged": converged,
                 "objective_value": objective_value,
                 "start_trace": start_trace,
+                "start_trace_meta": start_trace_meta,
+                "infeasible_trace_points": infeasible_points,
                 "best_value": best_log_fom if best_log_fom > -math.inf else None,
                 "isp": isp_report,
                 "n_starts": n_starts,
@@ -745,6 +938,7 @@ def _record_start(
         best_composition,
         trial_history,
         start_history,
+        start_history_meta,
         completed,
         failed,
     )
