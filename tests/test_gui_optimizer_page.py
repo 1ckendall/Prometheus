@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -64,12 +65,16 @@ class _DummyMainWindow:
         self.engine_dock = _DummyEngineDock()
         self._status_bar = _DummyStatusBar()
         self.focus_calls = []
+        self.optimizer_focus_calls = 0
 
     def _focus_simulator(self, simulator_tab_index: int | None = None):
         self.focus_calls.append(simulator_tab_index)
 
     def statusBar(self):
         return self._status_bar
+
+    def _focus_optimizer(self):
+        self.optimizer_focus_calls += 1
 
 
 @pytest.fixture
@@ -100,6 +105,14 @@ def test_optimizer_page_has_no_inline_config_buttons(page):
     assert not hasattr(page, "btn_load_config")
     assert callable(page.save_config_dialog)
     assert callable(page.load_config_dialog)
+
+
+def test_optimizer_page_uses_right_panel_run_controls(page):
+    assert page.btn_start is page.config_panel.btn_start
+    assert page.btn_cancel is page.config_panel.btn_cancel
+    assert page.btn_apply is page.config_panel.btn_apply
+    assert page.progress is page.config_panel.progress_bar
+    assert page.progress_label is page.config_panel.progress_label
 
 
 def test_collect_problem_compiles_label_rules(page):
@@ -154,6 +167,8 @@ def test_collect_problem_rejects_label_without_rule(page):
 
 def test_progress_update_handles_failed_start(page):
     page.progress.setRange(0, 4)
+    page.progress.setValue(0)
+    page._run_total_starts = 4
     page._on_progress(
         {
             "start": 0,
@@ -165,6 +180,25 @@ def test_progress_update_handles_failed_start(page):
     )
 
     assert "failed" in page.progress_label.text()
+    assert page.progress.value() == 0
+
+
+def test_progress_partial_update_does_not_advance_bar(page):
+    page.progress.setRange(0, 4)
+    page.progress.setValue(0)
+    page._run_total_starts = 4
+    page._on_progress(
+        {
+            "start": 0,
+            "partial": True,
+            "converged": False,
+            "start_trace": [(0, 5.0)],
+            "best_value": None,
+            "n_starts": 4,
+        }
+    )
+
+    assert page.progress.value() == 0
 
 
 def test_progress_update_live_history_appends_point(page):
@@ -202,7 +236,7 @@ def test_start_trace_toggle_updates_visibility(page):
     assert page._start_trace_enabled[0] is False
 
 
-def test_apply_best_to_simulator_normalises_to_unit_total(page):
+def test_apply_best_to_simulator_outputs_percentages_with_three_decimals(page):
     page._latest_best_composition = {
         "ALUMINUM_PURE_CRYSTALINE": 0.150000,
         "AMMONIUM_PERCHLORATE": 0.532452,
@@ -216,4 +250,42 @@ def test_apply_best_to_simulator_normalises_to_unit_total(page):
     payload = page.main_window.page_simulator.applied_payload
     assert payload is not None
     total = sum(float(c["mass_fraction"]) for c in payload["components"])
-    assert abs(total - 1.0) < 1e-12
+    assert abs(total - 100.0) < 1e-12
+    for component in payload["components"]:
+        scaled = float(component["mass_fraction"]) * 1000.0
+        assert abs(scaled - round(scaled)) < 1e-12
+
+
+def test_load_optimizer_config_focuses_optimizer_tab(page, monkeypatch, tmp_path):
+    config_path = tmp_path / "demo.prop-opt.json"
+    config = {
+        "problem": {
+            "variables": [
+                {"ingredient_id": "AP", "minimum": 60.0, "maximum": 80.0},
+                {"ingredient_id": "AL", "minimum": 5.0, "maximum": 20.0},
+            ],
+            "fixed_proportion_groups": [],
+            "sum_to_total_groups": [],
+        },
+        "objective": {"isp_variant": "isp_actual", "rho_exponent": 0.25},
+        "operating_point": {"shifting": True},
+        "run": {
+            "n_starts": 4,
+            "max_iter_per_start": 10,
+            "n_workers": 0,
+            "seed": 42,
+        },
+    }
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "prometheus_equilibrium.gui.pages.optimizer.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: (
+            str(config_path),
+            "Optimizer Config (*.prop-opt.json)",
+        ),
+    )
+
+    page.load_config_dialog()
+
+    assert page.main_window.optimizer_focus_calls == 1

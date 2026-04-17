@@ -1,4 +1,4 @@
-"""Benchmark multi-start gradient optimizer configurations on optimisation_test_1.json.
+"""Benchmark multi-start gradient optimizer configurations on optimisation_test_1.prop-opt.json.
 
 Usage:
     uv run python benchmark_gradient.py
@@ -23,7 +23,7 @@ from loguru import logger
 
 logger.remove()  # suppress solver debug/info output during benchmark
 
-_ROOT = Path(__file__).parent
+_CONFIG_PATH = _ROOT / "optimisation_test_1.prop-opt.json"
 _CONFIG_PATH = _ROOT / "optimisation_test_1.json"
 _PKG = _ROOT / "prometheus_equilibrium"
 _THERMO_DIR = _PKG / "thermo_data"

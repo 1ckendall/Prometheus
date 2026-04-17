@@ -61,23 +61,19 @@ def evaluate_composition(
     )
     eq_problem.validate()
 
+    solve_kwargs = {
+        "shifting": operating_point.shifting,
+        "ambient_pressure": operating_point.ambient_pressure_pa,
+        "compute_profile": False,
+    }
+    if operating_point.expansion_type == "pressure":
+        solve_kwargs["pe_pa"] = operating_point.expansion_value
+    else:
+        solve_kwargs["area_ratio"] = operating_point.expansion_value
+
+    # Optimizer scoring intentionally runs a single expansion mode per evaluation.
     try:
-        if operating_point.expansion_type == "pressure":
-            perf = perf_solver.solve(
-                eq_problem,
-                pe_pa=operating_point.expansion_value,
-                shifting=operating_point.shifting,
-                ambient_pressure=operating_point.ambient_pressure_pa,
-                compute_profile=False,
-            )
-        else:
-            perf = perf_solver.solve(
-                eq_problem,
-                area_ratio=operating_point.expansion_value,
-                shifting=operating_point.shifting,
-                ambient_pressure=operating_point.ambient_pressure_pa,
-                compute_profile=False,
-            )
+        perf = perf_solver.solve(eq_problem, **solve_kwargs)
     except RuntimeError as exc:
         raise ValueError(str(exc)) from exc
     isp = float(getattr(perf, objective.isp_variant))

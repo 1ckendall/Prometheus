@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -106,6 +105,10 @@ class OptimizerPage(QWidget):
         self._start_trace_enabled: dict[int, bool] = {}
         self._start_trace_checks: dict[int, QCheckBox] = {}
         self._baseline_mass_fraction: dict[str, float] = {}
+        self._run_total_starts = 0
+        self._run_processed_starts = 0
+        self._run_converged_starts = 0
+        self._run_reported_starts: set[int] = set()
 
         layout = QVBoxLayout(self)
 
@@ -119,7 +122,6 @@ class OptimizerPage(QWidget):
         content_layout.addWidget(self._build_controls_group())
         content_layout.addWidget(self._build_variables_group())
         content_layout.addWidget(self._build_group_rules_group())
-        content_layout.addWidget(self._build_actions_group())
         content_layout.addWidget(self._build_results_group())
         content_layout.addStretch()
 
@@ -127,6 +129,17 @@ class OptimizerPage(QWidget):
 
         # Right-hand dock for optimizer-specific engine settings
         self.config_panel = OptimizerPanel(main_window)
+
+        # Run controls now live exclusively in the right dock panel.
+        self.btn_start = self.config_panel.btn_start
+        self.btn_cancel = self.config_panel.btn_cancel
+        self.btn_apply = self.config_panel.btn_apply
+        self.progress_label = self.config_panel.progress_label
+        self.progress = self.config_panel.progress_bar
+        self.progress_label.setText("Idle")
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.progress.setFormat("%v converged / %m starts")
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(scroll_area)
@@ -246,35 +259,6 @@ class OptimizerPage(QWidget):
         actions.addWidget(self.btn_group_help)
         actions.addStretch()
         grid.addLayout(actions, 2, 0)
-        return group
-
-    def _build_actions_group(self) -> QGroupBox:
-        group = QGroupBox("Run")
-        layout = QVBoxLayout(group)
-
-        buttons = QHBoxLayout()
-        self.btn_start = QPushButton("Start Optimization")
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_apply = QPushButton("Apply Best to Simulator")
-        self.btn_cancel.setEnabled(False)
-        self.btn_apply.setEnabled(False)
-
-        self.btn_start.clicked.connect(self.start_optimization)
-        self.btn_cancel.clicked.connect(self.cancel_optimization)
-        self.btn_apply.clicked.connect(self.apply_best_to_simulator)
-
-        buttons.addWidget(self.btn_start)
-        buttons.addWidget(self.btn_cancel)
-        buttons.addWidget(self.btn_apply)
-
-        self.progress_label = QLabel("Idle")
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-
-        layout.addLayout(buttons)
-        layout.addWidget(self.progress_label)
-        layout.addWidget(self.progress)
         return group
 
     def _build_results_group(self) -> QGroupBox:
@@ -703,6 +687,8 @@ class OptimizerPage(QWidget):
             QMessageBox.critical(self, "Config Error", str(exc))
             return
 
+        if hasattr(self.main_window, "_focus_optimizer"):
+            self.main_window._focus_optimizer()
         self.output.setText(f"Config loaded from:\n{load_path}")
 
     # Backward-compatible aliases for any existing signal wiring.
@@ -846,9 +832,16 @@ class OptimizerPage(QWidget):
         self.btn_start.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.btn_apply.setEnabled(False)
-        self.progress_label.setText("Running optimization...")
+        self._run_total_starts = run_cfg.n_starts
+        self._run_processed_starts = 0
+        self._run_converged_starts = 0
+        self._run_reported_starts.clear()
+        self.progress_label.setText(
+            f"Running optimization... 0/{self._run_total_starts} converged"
+        )
         self.progress.setRange(0, run_cfg.n_starts)
         self.progress.setValue(0)
+        self.progress.setFormat("%v converged / %m starts")
         self._latest_best_composition = None
         self._live_history = []
         self._start_history = {}
@@ -871,15 +864,30 @@ class OptimizerPage(QWidget):
         self.progress_label.setText("Cancellation requested; stopping at next start...")
 
     def _on_progress(self, payload: dict) -> None:
+        partial = bool(payload.get("partial", False))
         start = int(payload.get("start", 0))
-        n_starts = int(payload.get("n_starts", self.progress.maximum()))
+        n_starts = int(payload.get("n_starts", self._run_total_starts or 1))
         objective_value = payload.get("objective_value")
         start_trace = payload.get("start_trace")
         infeasible_trace_points = payload.get("infeasible_trace_points")
         best = payload.get("best_value")
         converged = payload.get("converged", False)
-        # Progress advances by completed starts; parallel mode may send out of order.
-        self.progress.setValue(min(self.progress.value() + 1, self.progress.maximum()))
+
+        # Partial callbacks are per-iteration snapshots and must not advance run-level progress.
+        if not partial and start not in self._run_reported_starts:
+            self._run_reported_starts.add(start)
+            self._run_processed_starts += 1
+            if converged:
+                self._run_converged_starts += 1
+            self.progress.setRange(0, max(n_starts, 1))
+            self.progress.setValue(
+                min(self._run_converged_starts, self.progress.maximum())
+            )
+            self.progress_label.setText(
+                f"Processed {self._run_processed_starts}/{n_starts}; "
+                f"converged {self._run_converged_starts}/{n_starts}"
+            )
+
         if isinstance(start_trace, list):
             points: list[tuple[int, float]] = []
             for point in start_trace:
@@ -892,10 +900,14 @@ class OptimizerPage(QWidget):
                     self._rebuild_start_trace_toggles()
             self._plot_history()
 
+        if partial:
+            return
+
         if best is None:
             self.progress_label.setText(
                 f"Start {start + 1}/{n_starts}: "
                 + ("converged" if converged else "failed")
+                + f" | converged {self._run_converged_starts}/{n_starts}"
             )
             return
         infeasible_suffix = ""
@@ -906,21 +918,26 @@ class OptimizerPage(QWidget):
         self.progress_label.setText(
             f"Start {start + 1}/{n_starts}: "
             f"objective = {float(objective_value):.6f}, best = {best:.6f}{infeasible_suffix}"
+            f" | converged {self._run_converged_starts}/{n_starts}"
             if objective_value is not None
-            else f"Start {start + 1}/{n_starts}: best log FoM = {best:.6f}{infeasible_suffix}"
+            else (
+                f"Start {start + 1}/{n_starts}: best log FoM = {best:.6f}{infeasible_suffix}"
+                f" | converged {self._run_converged_starts}/{n_starts}"
+            )
         )
 
     def _on_finished(self, result) -> None:
         self.btn_start.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.btn_apply.setEnabled(True)
+        self.worker = None
         self._latest_best_composition = dict(result.best_composition)
 
         self.progress_label.setText(
             f"Finished: {result.completed_trials} converged, "
             f"{result.pruned_trials} failed"
         )
-        self.progress.setValue(self.progress.maximum())
+        self.progress.setValue(min(result.completed_trials, self.progress.maximum()))
 
         lines = [
             f"Best objective (Isp * rho^n): {result.best_objective:.6f}",
@@ -944,7 +961,19 @@ class OptimizerPage(QWidget):
     def _on_failed(self, message: str) -> None:
         self.btn_start.setEnabled(True)
         self.btn_cancel.setEnabled(False)
-        self.progress_label.setText("Optimization failed")
+        self.btn_apply.setEnabled(False)
+        self.worker = None
+        n_starts = max(self._run_total_starts, self.progress.maximum(), 1)
+        self.progress.setRange(0, n_starts)
+        self.progress.setValue(min(self._run_converged_starts, self.progress.maximum()))
+        self.progress_label.setText(
+            "Optimization failed"
+            + (
+                f" ({self._run_converged_starts}/{self._run_total_starts} converged)"
+                if self._run_total_starts > 0
+                else ""
+            )
+        )
         self.output.setText(f"Optimization failed:\n{message}")
 
     def _reset_history_plot(self) -> None:
@@ -1039,12 +1068,27 @@ class OptimizerPage(QWidget):
             QMessageBox.warning(self, "Invalid Composition", str(exc))
             return
 
+        percent_composition = {
+            ingredient_id: round(value * 100.0, 3)
+            for ingredient_id, value in normalised.items()
+        }
+        # Preserve a clean 100.000 total after rounding by applying residual to
+        # the largest component (stable and minimally disruptive).
+        if percent_composition:
+            largest_id = max(percent_composition, key=percent_composition.get)
+            residual = round(100.0 - sum(percent_composition.values()), 3)
+            if residual != 0.0:
+                percent_composition[largest_id] = round(
+                    percent_composition[largest_id] + residual,
+                    3,
+                )
+
         payload = {
             "schema_version": 1,
             "propellant_type": "solid",
             "components": [
                 {"name": ingredient_id, "mass_fraction": value}
-                for ingredient_id, value in normalised.items()
+                for ingredient_id, value in percent_composition.items()
             ],
         }
 
