@@ -93,6 +93,7 @@ def _worker_run_start(
     max_atoms: int,
     max_iter: int,
     fd_step: float,
+    ftol: float = 1e-4,
 ) -> dict[str, object]:
     """Run one SLSQP start in a worker process.
 
@@ -137,6 +138,7 @@ def _worker_run_start(
         _W_PERF_SOLVER,
         start_idx=start_idx,
         per_iter_callback=per_iter_cb,
+        ftol=ftol,
     )
     return {
         "worker_id": f"pid-{os.getpid()}",
@@ -304,6 +306,7 @@ def _run_single_start(
     perf_solver,
     start_idx: int | None = None,
     per_iter_callback: Callable[[int, list], None] | None = None,
+    ftol: float = 1e-4,
 ) -> (
     tuple[
         float,
@@ -418,7 +421,7 @@ def _run_single_start(
         callback=_callback,
         options={
             "maxiter": max_iter,
-            "ftol": 1e-6,
+            "ftol": ftol,
             "eps": fd_step,
             "disp": False,
         },
@@ -572,10 +575,12 @@ class MultiStartGradientOptimizer:
         n_starts: int = 8,
         max_iter_per_start: int = 100,
         fd_step: float = 1e-4,
+        ftol: float = 1e-4,
         seed: int | None = None,
         n_workers: int = 0,
         progress_callback: Callable[[dict], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
+        warm_starts: list[np.ndarray] | None = None,
     ) -> OptimizationResult:
         """Run multi-start SLSQP and return the best result.
 
@@ -594,6 +599,10 @@ class MultiStartGradientOptimizer:
             should_stop: Optional callback; if it returns ``True`` the run
                 stops after the current start completes (sequential) or
                 cancels pending futures (parallel).
+            warm_starts: Optional list of pre-computed starting vectors
+                (0–1 mass fractions, aligned with ``problem.variables``).
+                When provided, ``n_starts`` is ignored and these are used
+                directly instead of random sampling.
 
         Returns:
             :class:`~.engine.OptimizationResult` summarising the best start.
@@ -602,7 +611,11 @@ class MultiStartGradientOptimizer:
             RuntimeError: If no start produces a feasible result.
         """
         rng = np.random.default_rng(seed)
-        x0s = [self._random_start(rng) for _ in range(n_starts)]
+        if warm_starts is not None:
+            x0s = list(warm_starts)
+            n_starts = len(x0s)
+        else:
+            x0s = [self._random_start(rng) for _ in range(n_starts)]
 
         # Resolve effective worker count.
         if n_workers <= 0:
@@ -618,6 +631,7 @@ class MultiStartGradientOptimizer:
         trial_history: list[tuple[int, float]] = []
         start_history: dict[int, list[tuple[int, float]]] = {}
         start_history_meta: dict[int, list[dict[str, object]]] = {}
+        start_compositions: dict[int, dict[str, float]] = {}
         completed = 0
         failed = 0
 
@@ -667,6 +681,7 @@ class MultiStartGradientOptimizer:
                     per_iter_callback=(
                         _seq_iter_cb if progress_callback is not None else None
                     ),
+                    ftol=ftol,
                 )
                 (
                     best_log_fom,
@@ -677,6 +692,7 @@ class MultiStartGradientOptimizer:
                     trial_history,
                     start_history,
                     start_history_meta,
+                    start_compositions,
                     completed,
                     failed,
                 ) = _record_start(
@@ -690,6 +706,7 @@ class MultiStartGradientOptimizer:
                     trial_history,
                     start_history,
                     start_history_meta,
+                    start_compositions,
                     completed,
                     failed,
                     n_starts,
@@ -741,6 +758,7 @@ class MultiStartGradientOptimizer:
                             self.max_atoms,
                             max_iter_per_start,
                             fd_step,
+                            ftol,
                         ): i
                         for i, x0 in enumerate(x0s)
                     }
@@ -765,6 +783,7 @@ class MultiStartGradientOptimizer:
                             trial_history,
                             start_history,
                             start_history_meta,
+                            start_compositions,
                             completed,
                             failed,
                         ) = _record_start(
@@ -778,6 +797,7 @@ class MultiStartGradientOptimizer:
                             trial_history,
                             start_history,
                             start_history_meta,
+                            start_compositions,
                             completed,
                             failed,
                             n_starts,
@@ -803,6 +823,7 @@ class MultiStartGradientOptimizer:
             trial_history=trial_history,
             start_history=start_history,
             start_history_meta=start_history_meta,
+            start_compositions=start_compositions,
             completed_trials=completed,
             pruned_trials=failed,
         )
@@ -855,6 +876,7 @@ def _record_start(
     trial_history: list,
     start_history: dict[int, list[tuple[int, float]]],
     start_history_meta: dict[int, list[dict[str, object]]],
+    start_compositions: dict[int, dict[str, float]],
     completed: int,
     failed: int,
     n_starts: int,
@@ -873,6 +895,7 @@ def _record_start(
         trial_history: Accumulated ``(start_idx, best_log_fom)`` list.
         start_history: Accumulated ``start_idx -> [(iter_idx, log_fom)]`` map.
         start_history_meta: Accumulated per-iteration constraint diagnostics.
+        start_compositions: Accumulated ``start_idx -> composition`` map.
         completed: Count of successful starts so far.
         failed: Count of failed starts so far.
         n_starts: Total starts requested (for callback).
@@ -881,7 +904,8 @@ def _record_start(
     Returns:
         Updated tuple
         ``(best_log_fom, best_fom, best_isp, best_density, best_composition,
-        trial_history, start_history, start_history_meta, completed, failed)``.
+        trial_history, start_history, start_history_meta, start_compositions,
+        completed, failed)``.
     """
     objective_value = None
     start_trace = None
@@ -907,6 +931,7 @@ def _record_start(
         trial_history.append((start_idx, best_log_fom))
         start_history[start_idx] = start_trace
         start_history_meta[start_idx] = start_trace_meta
+        start_compositions[start_idx] = composition
 
     if progress_callback is not None:
         infeasible_points = None
@@ -939,6 +964,253 @@ def _record_start(
         trial_history,
         start_history,
         start_history_meta,
+        start_compositions,
         completed,
         failed,
     )
+
+
+# ---------------------------------------------------------------------------
+# Staged optimizer helpers
+# ---------------------------------------------------------------------------
+
+
+def _wrap_stage_callback(
+    cb: Callable[[dict], None] | None,
+    stage: int,
+    start_offset: int,
+    total_starts: int,
+) -> Callable[[dict], None] | None:
+    """Wrap a progress callback to inject stage metadata.
+
+    Args:
+        cb: Underlying progress callback, or ``None``.
+        stage: Stage number (1 = frozen exploration, 2 = shifting refinement).
+        start_offset: Value added to the ``start`` index in each payload so
+            stage-2 indices do not collide with stage-1 indices.
+        total_starts: Total starts across both stages, reported as ``n_starts``
+            in every payload so the GUI progress bar stays consistent.
+
+    Returns:
+        Wrapped callback, or ``None`` if ``cb`` is ``None``.
+    """
+    if cb is None:
+        return None
+
+    def _wrapped(payload: dict) -> None:
+        payload = dict(payload)
+        payload["stage"] = stage
+        payload["n_starts"] = total_starts
+        if "start" in payload:
+            payload["start"] = int(payload["start"]) + start_offset
+        cb(payload)
+
+    return _wrapped
+
+
+class StagedGradientOptimizer:
+    """Two-stage optimizer: frozen exploration followed by shifting refinement.
+
+    Stage 1 runs ``n_starts`` random starts using frozen nozzle expansion
+    (fast, ~10× cheaper per evaluation).  The top ``n_refine`` final
+    compositions from stage 1 are then warm-started into stage 2, which
+    re-optimises with full shifting expansion to reach the true optimum
+    without paying the shifting cost for every exploratory evaluation.
+
+    The ``optimize()`` method signature is intentionally identical to
+    :meth:`MultiStartGradientOptimizer.optimize` so that the two classes are
+    drop-in substitutes in the GUI worker and headless runner.  The
+    staged-specific parameters (``n_refine``, ``max_iter_stage2``) are
+    captured at construction time.
+
+    When ``operating_point.shifting`` is ``False`` this class behaves
+    identically to :class:`MultiStartGradientOptimizer` (staged mode provides
+    no benefit over a single frozen pass).
+
+    Args:
+        problem: Constraint definition for composition generation.
+        objective: Objective settings.
+        operating_point: Target chamber / expansion conditions (shifting=True
+            for the stage-2 evaluation).
+        prop_db: Loaded propellant database.
+        spec_db: Loaded species database.
+        solver: Equilibrium solver instance.
+        enabled_databases: Enabled thermo database labels for species selection.
+        max_atoms: Product-species max-atoms filter.
+        n_refine: Number of stage-1 optima to carry forward into stage 2.
+            Clamped to the number of converged stage-1 starts.
+        max_iter_stage2: Maximum SLSQP iterations for each stage-2 refinement
+            start.
+    """
+
+    def __init__(
+        self,
+        problem: OptimizationProblem,
+        objective: ObjectiveSpec,
+        operating_point: OperatingPoint,
+        prop_db,
+        spec_db,
+        solver,
+        enabled_databases: list[str],
+        max_atoms: int,
+        n_refine: int = 4,
+        max_iter_stage2: int = 20,
+    ) -> None:
+        validate_objective(objective)
+        validate_operating_point(operating_point)
+        problem.validate()
+
+        self.problem = problem
+        self.objective = objective
+        self.operating_point = operating_point
+        self.prop_db = prop_db
+        self.spec_db = spec_db
+        self.solver = solver
+        self.enabled_databases = enabled_databases
+        self.max_atoms = max_atoms
+        self._n_refine = n_refine
+        self._max_iter_stage2 = max_iter_stage2
+        self._var_ids = [v.ingredient_id for v in problem.variables]
+
+    def optimize(
+        self,
+        n_starts: int = 8,
+        max_iter_per_start: int = 30,
+        fd_step: float = 1e-4,
+        ftol: float = 1e-4,
+        seed: int | None = None,
+        n_workers: int = 0,
+        progress_callback: Callable[[dict], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
+        warm_starts: list[np.ndarray] | None = None,
+    ) -> OptimizationResult:
+        """Run staged optimization: frozen stage 1 then shifting stage 2.
+
+        ``max_iter_per_start`` is used as the iteration budget for **stage 1**.
+        Stage 2 uses :attr:`max_iter_stage2` supplied at construction.  When
+        ``operating_point.shifting`` is ``False``, stage 2 is skipped and the
+        stage-1 result is returned directly (frozen-only fallback).
+
+        Args:
+            n_starts: Number of random starting points for stage 1.
+            max_iter_per_start: SLSQP iteration budget per start in stage 1.
+            fd_step: Finite-difference step size (0–1 mass-fraction scale).
+            seed: Optional random seed for reproducible starts.
+            n_workers: Number of parallel worker processes (0 = auto, 1 = seq).
+            progress_callback: Optional progress callback.  Payloads include a
+                ``stage`` key (1 or 2) and ``n_starts`` reflects the combined
+                total across both stages.
+            should_stop: Optional cancellation callback checked between stages
+                and after each parallel future.
+            warm_starts: Ignored (accepted for API compatibility).
+
+        Returns:
+            :class:`~.engine.OptimizationResult` from stage 2 (shifting),
+            or stage 1 (frozen) if shifting is disabled or stage 1 is
+            cancelled before completion.
+
+        Raises:
+            RuntimeError: If stage 1 produces no converged starts.
+        """
+        if not self.operating_point.shifting:
+            # No benefit from staging; fall back to a single frozen pass.
+            plain = MultiStartGradientOptimizer(
+                problem=self.problem,
+                objective=self.objective,
+                operating_point=self.operating_point,
+                prop_db=self.prop_db,
+                spec_db=self.spec_db,
+                solver=self.solver,
+                enabled_databases=self.enabled_databases,
+                max_atoms=self.max_atoms,
+            )
+            return plain.optimize(
+                n_starts=n_starts,
+                max_iter_per_start=max_iter_per_start,
+                fd_step=fd_step,
+                ftol=ftol,
+                seed=seed,
+                n_workers=n_workers,
+                progress_callback=progress_callback,
+                should_stop=should_stop,
+            )
+
+        n_refine = self._n_refine
+        total_starts = n_starts + n_refine
+        stage1_cb = _wrap_stage_callback(
+            progress_callback, stage=1, start_offset=0, total_starts=total_starts
+        )
+
+        # ----- Stage 1: frozen exploration -----
+        frozen_op = OperatingPoint(
+            chamber_pressure_pa=self.operating_point.chamber_pressure_pa,
+            expansion_type=self.operating_point.expansion_type,
+            expansion_value=self.operating_point.expansion_value,
+            ambient_pressure_pa=self.operating_point.ambient_pressure_pa,
+            shifting=False,
+        )
+        stage1_opt = MultiStartGradientOptimizer(
+            problem=self.problem,
+            objective=self.objective,
+            operating_point=frozen_op,
+            prop_db=self.prop_db,
+            spec_db=self.spec_db,
+            solver=self.solver,
+            enabled_databases=self.enabled_databases,
+            max_atoms=self.max_atoms,
+        )
+        stage1_result = stage1_opt.optimize(
+            n_starts=n_starts,
+            max_iter_per_start=max_iter_per_start,
+            fd_step=fd_step,
+            ftol=ftol,
+            seed=seed,
+            n_workers=n_workers,
+            progress_callback=stage1_cb,
+            should_stop=should_stop,
+        )
+
+        if should_stop is not None and should_stop():
+            return stage1_result
+
+        # ----- Select top-n_refine stage-1 optima by final frozen score -----
+        n_refine = min(n_refine, len(stage1_result.start_compositions))
+        if n_refine == 0:
+            raise RuntimeError(
+                "Stage 1 produced no converged starts; cannot proceed to stage 2."
+            )
+
+        scored: list[tuple[float, int, np.ndarray]] = []
+        for sidx, comp in stage1_result.start_compositions.items():
+            trace = stage1_result.start_history.get(sidx, [])
+            final_score = trace[-1][1] if trace else -math.inf
+            x0 = np.array([comp.get(vid, 0.0) for vid in self._var_ids], dtype=float)
+            scored.append((final_score, sidx, x0))
+        scored.sort(key=lambda t: t[0], reverse=True)
+        warm = [x0 for _, _, x0 in scored[:n_refine]]
+
+        # ----- Stage 2: shifting refinement -----
+        stage2_cb = _wrap_stage_callback(
+            progress_callback, stage=2, start_offset=n_starts, total_starts=total_starts
+        )
+        stage2_opt = MultiStartGradientOptimizer(
+            problem=self.problem,
+            objective=self.objective,
+            operating_point=self.operating_point,
+            prop_db=self.prop_db,
+            spec_db=self.spec_db,
+            solver=self.solver,
+            enabled_databases=self.enabled_databases,
+            max_atoms=self.max_atoms,
+        )
+        return stage2_opt.optimize(
+            n_starts=n_refine,
+            max_iter_per_start=self._max_iter_stage2,
+            fd_step=fd_step,
+            ftol=ftol,
+            seed=seed,
+            n_workers=n_workers,
+            progress_callback=stage2_cb,
+            should_stop=should_stop,
+            warm_starts=warm,
+        )

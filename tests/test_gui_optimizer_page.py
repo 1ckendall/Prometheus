@@ -97,7 +97,7 @@ def test_load_from_simulator_adds_group_label_column_entries(page):
 
 def test_optimizer_page_uses_scroll_area(page):
     assert len(page.findChildren(QScrollArea)) >= 1
-    assert page.canvas_best.minimumHeight() >= 260
+    assert page.canvas_best.minimumHeight() >= 200
 
 
 def test_optimizer_page_has_no_inline_config_buttons(page):
@@ -203,7 +203,8 @@ def test_progress_partial_update_does_not_advance_bar(page):
 
 def test_progress_update_live_history_appends_point(page):
     page._live_history = []
-    page._start_history = {}
+    page._stage_history = {1: {}, 2: {}}
+    page._stage_trace_enabled = {1: {}, 2: {}}
     page._on_progress(
         {
             "start": 3,
@@ -217,23 +218,23 @@ def test_progress_update_live_history_appends_point(page):
     )
 
     assert page._live_history == [(3, 7.123)]
-    assert page._start_history[3] == [(0, 6.2), (1, 6.8), (2, 7.05)]
-    assert 3 in page._start_trace_checks
+    assert page._stage_history[1][3] == [(0, 6.2), (1, 6.8), (2, 7.05)]
+    assert 3 in page._stage_trace_checks[1]
 
 
 def test_start_trace_toggle_updates_visibility(page):
-    page._start_history = {
-        0: [(0, 6.8), (1, 7.1)],
-        1: [(0, 6.9)],
+    page._stage_history = {
+        1: {0: [(0, 6.8), (1, 7.1)], 1: [(0, 6.9)]},
+        2: {},
     }
-    page._start_trace_enabled = {0: True, 1: True}
-    page._rebuild_start_trace_toggles()
+    page._stage_trace_enabled = {1: {0: True, 1: True}, 2: {}}
+    page._rebuild_start_trace_toggles(1)
 
-    toggle = page._start_trace_checks[0]
+    toggle = page._stage_trace_checks[1][0]
     assert isinstance(toggle, QCheckBox)
     toggle.setChecked(False)
 
-    assert page._start_trace_enabled[0] is False
+    assert page._stage_trace_enabled[1][0] is False
 
 
 def test_apply_best_to_simulator_outputs_percentages_with_three_decimals(page):

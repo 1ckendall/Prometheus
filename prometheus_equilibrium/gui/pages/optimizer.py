@@ -42,6 +42,7 @@ from prometheus_equilibrium.optimization import (
     SumToTotalGroup,
     VariableBound,
 )
+from prometheus_equilibrium.optimization.gradient_engine import StagedGradientOptimizer
 
 
 @dataclass(frozen=True)
@@ -51,8 +52,20 @@ class _RunConfig:
     n_starts: int
     max_iter_per_start: int
     fd_step: float
+    ftol: float
     n_workers: int
     seed: int | None
+    expansion_mode: str = "Shifting"  # "Frozen" | "Shifting" | "Shifting (Staged)"
+    n_refine: int = 4
+    max_iter_stage2: int = 20
+
+    @property
+    def shifting(self) -> bool:
+        return self.expansion_mode != "Frozen"
+
+    @property
+    def staged(self) -> bool:
+        return self.expansion_mode == "Shifting (Staged)"
 
 
 class OptimizationWorker(QThread):
@@ -79,6 +92,7 @@ class OptimizationWorker(QThread):
                 n_starts=self.run_config.n_starts,
                 max_iter_per_start=self.run_config.max_iter_per_start,
                 fd_step=self.run_config.fd_step,
+                ftol=self.run_config.ftol,
                 seed=self.run_config.seed,
                 n_workers=self.run_config.n_workers,
                 progress_callback=self.progress.emit,
@@ -101,9 +115,13 @@ class OptimizerPage(QWidget):
         self.worker: OptimizationWorker | None = None
         self._latest_best_composition: dict[str, float] | None = None
         self._live_history: list[tuple[int, float]] = []
-        self._start_history: dict[int, list[tuple[int, float]]] = {}
-        self._start_trace_enabled: dict[int, bool] = {}
-        self._start_trace_checks: dict[int, QCheckBox] = {}
+        # Per-stage histories (stage 1 = frozen / non-staged, stage 2 = shifting refine)
+        self._stage_history: dict[int, dict[int, list[tuple[int, float]]]] = {
+            1: {},
+            2: {},
+        }
+        self._stage_trace_enabled: dict[int, dict[int, bool]] = {1: {}, 2: {}}
+        self._stage_trace_checks: dict[int, dict[int, QCheckBox]] = {1: {}, 2: {}}
         self._baseline_mass_fraction: dict[str, float] = {}
         self._run_total_starts = 0
         self._run_processed_starts = 0
@@ -171,6 +189,16 @@ class OptimizerPage(QWidget):
         self.spin_max_iter.setRange(1, 1000)
         self.spin_max_iter.setValue(10)
 
+        self.combo_ftol = QComboBox()
+        self.combo_ftol.addItems(["1e-2", "1e-3", "1e-4", "1e-5", "1e-6"])
+        self.combo_ftol.setCurrentText("1e-4")
+        self.combo_ftol.setEditable(True)
+        self.combo_ftol.setToolTip(
+            "SLSQP convergence tolerance (ftol).\n"
+            "Smaller values run more iterations for tighter convergence.\n"
+            "1e-4 is a good default; use 1e-6 for final high-accuracy runs."
+        )
+
         self.spin_n_workers = QSpinBox()
         self.spin_n_workers.setRange(0, 64)
         self.spin_n_workers.setValue(0)
@@ -185,16 +213,56 @@ class OptimizerPage(QWidget):
         self.spin_seed.setRange(0, 2_147_483_647)
         self.spin_seed.setValue(42)
 
-        self.check_shifting = QCheckBox("Score shifting expansion")
-        self.check_shifting.setChecked(True)
+        self.combo_expansion_mode = QComboBox()
+        self.combo_expansion_mode.addItems(["Frozen", "Shifting", "Shifting (Staged)"])
+        self.combo_expansion_mode.setCurrentText("Shifting")
+        self.combo_expansion_mode.setToolTip(
+            "Frozen: fast, does not account for composition change in nozzle.\n"
+            "Shifting: accurate shifting-equilibrium expansion (slower).\n"
+            "Shifting (Staged): fast frozen pass to find candidates, then\n"
+            "  shifting refinement of the top N — best of both worlds."
+        )
+
+        self.spin_n_refine = QSpinBox()
+        self.spin_n_refine.setRange(1, 100)
+        self.spin_n_refine.setValue(4)
+        self.spin_n_refine.setToolTip(
+            "Number of best stage-1 optima to carry into shifting refinement."
+        )
+
+        self.spin_max_iter_stage2 = QSpinBox()
+        self.spin_max_iter_stage2.setRange(1, 1000)
+        self.spin_max_iter_stage2.setValue(10)
+        self.spin_max_iter_stage2.setToolTip(
+            "Maximum SLSQP iterations per start in stage 2 (shifting refinement)."
+        )
+
+        def _update_staged_controls() -> None:
+            staged = self.combo_expansion_mode.currentText() == "Shifting (Staged)"
+            for widget in (self.spin_n_refine, self.spin_max_iter_stage2):
+                widget.setVisible(staged)
+                label = form.labelForField(widget)
+                if label is not None:
+                    label.setVisible(staged)
+            if hasattr(self, "canvas_stage2"):
+                self.canvas_stage2.setVisible(staged)
+                self.stage2_trace_toggles.setVisible(staged)
+
+        self.combo_expansion_mode.currentIndexChanged.connect(
+            lambda _: _update_staged_controls()
+        )
 
         form.addRow("Isp variant", self.combo_isp_variant)
         form.addRow("Density exponent n", self.spin_rho_exp)
         form.addRow("Starts", self.spin_starts)
         form.addRow("Max iter / start", self.spin_max_iter)
+        form.addRow("Convergence tolerance", self.combo_ftol)
         form.addRow("Workers", self.spin_n_workers)
         form.addRow("Seed", self.spin_seed)
-        form.addRow("Expansion mode", self.check_shifting)
+        form.addRow("Expansion mode", self.combo_expansion_mode)
+        form.addRow("Refine top N (stage 2)", self.spin_n_refine)
+        form.addRow("Iter/start (stage 2)", self.spin_max_iter_stage2)
+        _update_staged_controls()
         return group
 
     def _build_variables_group(self) -> QGroupBox:
@@ -267,22 +335,40 @@ class OptimizerPage(QWidget):
 
         self.canvas_best = GraphCanvas(
             self,
-            "Objective by Start (log scale objective)",
+            "Stage 1 — Frozen Exploration",
             "Iteration",
-            "log(Isp * rho^n)",
+            "log(Isp \u00d7 \u03c1^n)",
         )
-        self.canvas_best.setMinimumHeight(260)
+        self.canvas_best.setMinimumHeight(220)
         self.worker_trace_toggles = QWidget(self)
         self.worker_trace_layout = QHBoxLayout(self.worker_trace_toggles)
         self.worker_trace_layout.setContentsMargins(0, 0, 0, 0)
-        self.worker_trace_layout.addWidget(QLabel("Start traces:"))
+        self.worker_trace_layout.addWidget(QLabel("Stage 1 traces:"))
         self.worker_trace_layout.addStretch()
+
+        self.canvas_stage2 = GraphCanvas(
+            self,
+            "Stage 2 — Shifting Refinement",
+            "Iteration",
+            "log(Isp \u00d7 \u03c1^n)",
+        )
+        self.canvas_stage2.setMinimumHeight(220)
+        self.stage2_trace_toggles = QWidget(self)
+        self.stage2_trace_layout = QHBoxLayout(self.stage2_trace_toggles)
+        self.stage2_trace_layout.setContentsMargins(0, 0, 0, 0)
+        self.stage2_trace_layout.addWidget(QLabel("Stage 2 traces:"))
+        self.stage2_trace_layout.addStretch()
+        self.canvas_stage2.setVisible(False)
+        self.stage2_trace_toggles.setVisible(False)
+
         self.output = QTextEdit()
         self.output.setReadOnly(True)
         self.output.setText("Run an optimization to populate results.")
 
         layout.addWidget(self.canvas_best)
         layout.addWidget(self.worker_trace_toggles)
+        layout.addWidget(self.canvas_stage2)
+        layout.addWidget(self.stage2_trace_toggles)
         layout.addWidget(self.output)
         return group
 
@@ -558,27 +644,52 @@ class OptimizerPage(QWidget):
             expansion_type="pressure" if is_pressure else "area_ratio",
             expansion_value=expansion_value,
             ambient_pressure_pa=ambient_pressure,
-            shifting=self.check_shifting.isChecked(),
+            shifting=self.combo_expansion_mode.currentText() != "Frozen",
         )
 
         problem = self._collect_problem()
+        expansion_mode = self.combo_expansion_mode.currentText()
+        n_refine = int(self.spin_n_refine.value())
+        max_iter_stage2 = int(self.spin_max_iter_stage2.value())
+        try:
+            ftol = float(self.combo_ftol.currentText())
+        except ValueError:
+            ftol = 1e-4
         run_cfg = _RunConfig(
             n_starts=int(self.spin_starts.value()),
             max_iter_per_start=int(self.spin_max_iter.value()),
             fd_step=1e-4,
+            ftol=ftol,
             n_workers=int(self.spin_n_workers.value()),
             seed=int(self.spin_seed.value()),
+            expansion_mode=expansion_mode,
+            n_refine=n_refine,
+            max_iter_stage2=max_iter_stage2,
         )
-        optimizer = MultiStartGradientOptimizer(
-            problem=problem,
-            objective=objective,
-            operating_point=operating_point,
-            prop_db=self.main_window.prop_db,
-            spec_db=self.main_window.spec_db,
-            solver=ed.solver,
-            enabled_databases=ed.get_enabled_databases(),
-            max_atoms=ed._max_atoms(),
-        )
+        if run_cfg.staged:
+            optimizer = StagedGradientOptimizer(
+                problem=problem,
+                objective=objective,
+                operating_point=operating_point,
+                prop_db=self.main_window.prop_db,
+                spec_db=self.main_window.spec_db,
+                solver=ed.solver,
+                enabled_databases=ed.get_enabled_databases(),
+                max_atoms=ed._max_atoms(),
+                n_refine=n_refine,
+                max_iter_stage2=max_iter_stage2,
+            )
+        else:
+            optimizer = MultiStartGradientOptimizer(
+                problem=problem,
+                objective=objective,
+                operating_point=operating_point,
+                prop_db=self.main_window.prop_db,
+                spec_db=self.main_window.spec_db,
+                solver=ed.solver,
+                enabled_databases=ed.get_enabled_databases(),
+                max_atoms=ed._max_atoms(),
+            )
         return optimizer, run_cfg
 
     # ------------------------------------------------------------------
@@ -614,11 +725,15 @@ class OptimizerPage(QWidget):
             n_starts=run_cfg.n_starts,
             max_iter_per_start=run_cfg.max_iter_per_start,
             fd_step=run_cfg.fd_step,
+            ftol=run_cfg.ftol,
             n_workers=run_cfg.n_workers,
             seed=run_cfg.seed,
             solver_type=solver_type,
             enabled_databases=ed.get_enabled_databases(),
             max_atoms=ed._max_atoms(),
+            staged_enabled=run_cfg.staged,
+            n_refine=run_cfg.n_refine,
+            max_iter_stage2=run_cfg.max_iter_stage2,
         )
 
     def save_config_dialog(self) -> None:
@@ -810,16 +925,34 @@ class OptimizerPage(QWidget):
         if isp_idx >= 0:
             self.combo_isp_variant.setCurrentIndex(isp_idx)
         self.spin_rho_exp.setValue(float(obj.get("rho_exponent", 0.0)))
-        self.check_shifting.setChecked(
-            bool(config.get("operating_point", {}).get("shifting", True))
-        )
+
+        # --- Expansion mode ---
+        op = config.get("operating_point", {})
+        staged_cfg = config.get("staged", {})
+        shifting = bool(op.get("shifting", True))
+        staged_enabled = bool(staged_cfg.get("enabled", False))
+        if not shifting:
+            mode = "Frozen"
+        elif staged_enabled:
+            mode = "Shifting (Staged)"
+        else:
+            mode = "Shifting"
+        idx = self.combo_expansion_mode.findText(mode)
+        if idx >= 0:
+            self.combo_expansion_mode.setCurrentIndex(idx)
 
         # --- Run config ---
         run = config.get("run", {})
         self.spin_starts.setValue(int(run.get("n_starts", 4)))
         self.spin_max_iter.setValue(int(run.get("max_iter_per_start", 10)))
+        ftol_val = float(run.get("ftol", 1e-4))
+        self.combo_ftol.setCurrentText(f"{ftol_val:g}")
         self.spin_n_workers.setValue(int(run.get("n_workers", 0)))
         self.spin_seed.setValue(int(run.get("seed") or 42))
+
+        # --- Staged config ---
+        self.spin_n_refine.setValue(int(staged_cfg.get("n_refine", 4)))
+        self.spin_max_iter_stage2.setValue(int(staged_cfg.get("max_iter_stage2", 10)))
 
     def start_optimization(self) -> None:
         """Launch optimization on a background thread."""
@@ -832,23 +965,33 @@ class OptimizerPage(QWidget):
         self.btn_start.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.btn_apply.setEnabled(False)
-        self._run_total_starts = run_cfg.n_starts
+        total_starts = (
+            run_cfg.n_starts + run_cfg.n_refine if run_cfg.staged else run_cfg.n_starts
+        )
+        self._run_total_starts = total_starts
         self._run_processed_starts = 0
         self._run_converged_starts = 0
         self._run_reported_starts.clear()
         self.progress_label.setText(
             f"Running optimization... 0/{self._run_total_starts} converged"
         )
-        self.progress.setRange(0, run_cfg.n_starts)
+        self.progress.setRange(0, total_starts)
         self.progress.setValue(0)
         self.progress.setFormat("%v converged / %m starts")
         self._latest_best_composition = None
         self._live_history = []
-        self._start_history = {}
-        self._start_trace_enabled = {}
+        self._stage_history = {1: {}, 2: {}}
+        self._stage_trace_enabled = {1: {}, 2: {}}
         self.output.setText("Running optimization...")
-        self._rebuild_start_trace_toggles()
-        self._reset_history_plot()
+        self._rebuild_start_trace_toggles(1)
+        self._rebuild_start_trace_toggles(2)
+        self._reset_history_plot(self.canvas_best)
+        self._reset_history_plot(self.canvas_stage2)
+        # Update canvas title for non-staged mode
+        staged = run_cfg.staged
+        self.canvas_best.title_text = (
+            "Stage 1 \u2014 Frozen Exploration" if staged else "Optimization Progress"
+        )
 
         self.worker = OptimizationWorker(optimizer, run_cfg)
         self.worker.progress.connect(self._on_progress)
@@ -872,6 +1015,8 @@ class OptimizerPage(QWidget):
         infeasible_trace_points = payload.get("infeasible_trace_points")
         best = payload.get("best_value")
         converged = payload.get("converged", False)
+        stage = payload.get("stage")
+        stage_tag = f" [stage {stage}]" if stage is not None else ""
 
         # Partial callbacks are per-iteration snapshots and must not advance run-level progress.
         if not partial and start not in self._run_reported_starts:
@@ -893,19 +1038,24 @@ class OptimizerPage(QWidget):
             for point in start_trace:
                 if isinstance(point, (list, tuple)) and len(point) == 2:
                     points.append((int(point[0]), float(point[1])))
+            s = stage if stage in (1, 2) else 1
             if points:
-                self._start_history[start] = points
-                if start not in self._start_trace_enabled:
-                    self._start_trace_enabled[start] = True
-                    self._rebuild_start_trace_toggles()
-            self._plot_history()
+                self._stage_history[s][start] = points
+                if start not in self._stage_trace_enabled[s]:
+                    self._stage_trace_enabled[s][start] = True
+                    self._rebuild_start_trace_toggles(s)
+            self._plot_stage_history(
+                self.canvas_best if s == 1 else self.canvas_stage2,
+                self._stage_history[s],
+                self._stage_trace_enabled[s],
+            )
 
         if partial:
             return
 
         if best is None:
             self.progress_label.setText(
-                f"Start {start + 1}/{n_starts}: "
+                f"Start {start + 1}/{n_starts}{stage_tag}: "
                 + ("converged" if converged else "failed")
                 + f" | converged {self._run_converged_starts}/{n_starts}"
             )
@@ -916,12 +1066,12 @@ class OptimizerPage(QWidget):
         if not self._live_history or self._live_history[-1][0] != start:
             self._live_history.append((start, float(best)))
         self.progress_label.setText(
-            f"Start {start + 1}/{n_starts}: "
+            f"Start {start + 1}/{n_starts}{stage_tag}: "
             f"objective = {float(objective_value):.6f}, best = {best:.6f}{infeasible_suffix}"
             f" | converged {self._run_converged_starts}/{n_starts}"
             if objective_value is not None
             else (
-                f"Start {start + 1}/{n_starts}: best log FoM = {best:.6f}{infeasible_suffix}"
+                f"Start {start + 1}/{n_starts}{stage_tag}: best log FoM = {best:.6f}{infeasible_suffix}"
                 f" | converged {self._run_converged_starts}/{n_starts}"
             )
         )
@@ -950,13 +1100,24 @@ class OptimizerPage(QWidget):
             lines.append(f"- {ingredient_id}: {value:.6f}")
         self.output.setText("\n".join(lines))
         self._live_history = list(result.trial_history)
-        self._start_history = {
-            int(start): list(points) for start, points in result.start_history.items()
-        }
-        for start in self._start_history:
-            self._start_trace_enabled.setdefault(start, True)
-        self._rebuild_start_trace_toggles()
-        self._plot_history()
+        # Partition start_history into stages using start_compositions keys as a proxy:
+        # staged callbacks offset stage-2 start indices by n_starts, so we use
+        # the stage info already accumulated in _stage_history from progress callbacks.
+        # On finish, merge result.start_history into whichever stage bucket already
+        # has that start_idx; unknown indices go to stage 1.
+        for start_idx, points in result.start_history.items():
+            si = int(start_idx)
+            s = 2 if si in self._stage_history[2] else 1
+            self._stage_history[s][si] = list(points)
+            self._stage_trace_enabled[s].setdefault(si, True)
+        self._rebuild_start_trace_toggles(1)
+        self._rebuild_start_trace_toggles(2)
+        self._plot_stage_history(
+            self.canvas_best, self._stage_history[1], self._stage_trace_enabled[1]
+        )
+        self._plot_stage_history(
+            self.canvas_stage2, self._stage_history[2], self._stage_trace_enabled[2]
+        )
 
     def _on_failed(self, message: str) -> None:
         self.btn_start.setEnabled(True)
@@ -976,85 +1137,90 @@ class OptimizerPage(QWidget):
         )
         self.output.setText(f"Optimization failed:\n{message}")
 
-    def _reset_history_plot(self) -> None:
-        ax = self.canvas_best.axes
+    _TRACE_COLORS = [
+        "#2a82da",
+        "#e67e22",
+        "#2ecc71",
+        "#e74c3c",
+        "#9b59b6",
+        "#1abc9c",
+        "#f1c40f",
+        "#95a5a6",
+        "#ff6b6b",
+        "#48dbfb",
+    ]
+    _TRACE_MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*", "<", ">"]
+
+    def _reset_history_plot(self, canvas: "GraphCanvas") -> None:
+        ax = canvas.axes
         ax.clear()
-        ax.set_title(self.canvas_best.title_text, color="white")
-        ax.set_xlabel(self.canvas_best.xlabel_text, color="white")
-        ax.set_ylabel(self.canvas_best.ylabel_text, color="white")
+        ax.set_title(canvas.title_text, color="white")
+        ax.set_xlabel(canvas.xlabel_text, color="white")
+        ax.set_ylabel(canvas.ylabel_text, color="white")
         ax.tick_params(colors="white")
         ax.grid(True, linestyle="--", alpha=0.3)
-        self.canvas_best.draw()
+        canvas.draw()
 
-    def _rebuild_start_trace_toggles(self) -> None:
-        while self.worker_trace_layout.count() > 2:
-            item = self.worker_trace_layout.takeAt(1)
+    def _rebuild_start_trace_toggles(self, stage: int) -> None:
+        layout = self.worker_trace_layout if stage == 1 else self.stage2_trace_layout
+        while layout.count() > 2:
+            item = layout.takeAt(1)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
 
-        self._start_trace_checks = {}
-        for start_idx in sorted(self._start_history):
-            check = QCheckBox(f"Start {start_idx + 1}")
-            check.setChecked(self._start_trace_enabled.get(start_idx, True))
+        self._stage_trace_checks[stage] = {}
+        for start_idx in sorted(self._stage_history[stage]):
+            label = f"S{start_idx + 1}"
+            check = QCheckBox(label)
+            check.setChecked(self._stage_trace_enabled[stage].get(start_idx, True))
             check.toggled.connect(
-                lambda state, start_id=start_idx: self._on_start_trace_toggled(
-                    start_id, state
+                lambda state, s=stage, si=start_idx: self._on_trace_toggled(
+                    s, si, state
                 )
             )
-            self.worker_trace_layout.insertWidget(
-                self.worker_trace_layout.count() - 1, check
-            )
-            self._start_trace_checks[start_idx] = check
+            layout.insertWidget(layout.count() - 1, check)
+            self._stage_trace_checks[stage][start_idx] = check
 
-    def _on_start_trace_toggled(self, start_idx: int, enabled: bool) -> None:
-        self._start_trace_enabled[start_idx] = enabled
-        self._plot_history()
+    def _on_trace_toggled(self, stage: int, start_idx: int, enabled: bool) -> None:
+        self._stage_trace_enabled[stage][start_idx] = enabled
+        canvas = self.canvas_best if stage == 1 else self.canvas_stage2
+        self._plot_stage_history(
+            canvas, self._stage_history[stage], self._stage_trace_enabled[stage]
+        )
 
-    def _plot_history(self) -> None:
-        self._reset_history_plot()
-        if not self._start_history:
+    def _plot_stage_history(
+        self,
+        canvas: "GraphCanvas",
+        history: dict[int, list[tuple[int, float]]],
+        trace_enabled: dict[int, bool],
+    ) -> None:
+        self._reset_history_plot(canvas)
+        if not history:
             return
-
-        colors = [
-            "#2a82da",
-            "#e67e22",
-            "#2ecc71",
-            "#e74c3c",
-            "#9b59b6",
-            "#1abc9c",
-            "#f1c40f",
-            "#95a5a6",
-            "#ff6b6b",
-            "#48dbfb",
-        ]
-        markers = ["o", "s", "^", "D", "v", "P", "X", "*", "<", ">"]
         plotted = False
-        for idx, start_idx in enumerate(sorted(self._start_history)):
-            if not self._start_trace_enabled.get(start_idx, True):
+        for idx, start_idx in enumerate(sorted(history)):
+            if not trace_enabled.get(start_idx, True):
                 continue
-            points = self._start_history.get(start_idx, [])
+            points = history.get(start_idx, [])
             if not points:
                 continue
             x = [t for t, _ in points]
             y = [v for _, v in points]
-            self.canvas_best.axes.plot(
+            canvas.axes.plot(
                 x,
                 y,
                 linestyle="-",
-                marker=markers[idx % len(markers)],
-                color=colors[idx % len(colors)],
-                label=f"Start {start_idx + 1}",
+                marker=self._TRACE_MARKERS[idx % len(self._TRACE_MARKERS)],
+                color=self._TRACE_COLORS[idx % len(self._TRACE_COLORS)],
+                label=f"S{start_idx + 1}",
             )
             plotted = True
-
         if plotted:
-            legend = self.canvas_best.axes.legend(
-                facecolor="#1f1f1f", edgecolor="white"
-            )
+            legend = canvas.axes.legend(facecolor="#1f1f1f", edgecolor="white")
             for text in legend.get_texts():
                 text.set_color("white")
-        self.canvas_best.draw()
+        canvas.draw()
 
     def apply_best_to_simulator(self) -> None:
         """Apply the current best composition into Simulator solid mode."""

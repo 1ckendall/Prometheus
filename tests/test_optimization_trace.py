@@ -80,6 +80,7 @@ def test_record_start_reports_infeasible_trace_points() -> None:
         trial_history=[],
         start_history={},
         start_history_meta=start_history_meta,
+        start_compositions={},
         completed=0,
         failed=0,
         n_starts=12,
@@ -88,5 +89,6 @@ def test_record_start_reports_infeasible_trace_points() -> None:
 
     assert output[6][9] == [(0, 13.05), (1, 13.28), (2, 13.08)]
     assert output[7][9][1]["is_feasible"] is False
+    assert output[8][9] == {"AP": 0.63, "AL": 0.16, "BIO": 0.21}
     assert payloads[-1]["infeasible_trace_points"] == 1
     assert isinstance(payloads[-1]["start_trace_meta"], list)

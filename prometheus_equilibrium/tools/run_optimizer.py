@@ -117,18 +117,21 @@ def run_from_config(
         load_operating_point,
         load_problem,
         load_solver_settings,
+        load_staged_config,
     )
     from prometheus_equilibrium.optimization.gradient_engine import (
         MultiStartGradientOptimizer,
+        StagedGradientOptimizer,
     )
 
     problem = load_problem(config)
     objective = load_objective(config)
     operating_point = load_operating_point(config)
-    n_starts, max_iter_per_start, fd_step, n_workers, seed = load_gradient_config(
+    n_starts, max_iter_per_start, fd_step, ftol, n_workers, seed = load_gradient_config(
         config
     )
     solver_type, enabled_databases, max_atoms = load_solver_settings(config)
+    staged_enabled, n_refine, max_iter_stage2 = load_staged_config(config)
 
     if n_starts_override is not None:
         n_starts = n_starts_override
@@ -145,45 +148,68 @@ def run_from_config(
     )
     spec_db, prop_db = _load_databases(thermo_dir, prop_db_path, enabled_databases)
 
+    use_staged = staged_enabled and operating_point.shifting
+    staged_suffix = (
+        f" | staged: n_refine={n_refine} max_iter_stage2={max_iter_stage2}"
+        if use_staged
+        else ""
+    )
     print(
         f"Solver: {_SOLVER_LABELS.get(solver_type, solver_type)} | "
         f"max_atoms={max_atoms} | "
         f"n_starts={n_starts} | max_iter={max_iter_per_start} | "
-        f"n_workers={n_workers} | seed={seed}",
+        f"n_workers={n_workers} | seed={seed}{staged_suffix}",
         file=sys.stderr,
     )
 
     solver = _make_solver(solver_type)
-    optimizer = MultiStartGradientOptimizer(
-        problem=problem,
-        objective=objective,
-        operating_point=operating_point,
-        prop_db=prop_db,
-        spec_db=spec_db,
-        solver=solver,
-        enabled_databases=enabled_databases,
-        max_atoms=max_atoms,
-    )
+    if use_staged:
+        optimizer = StagedGradientOptimizer(
+            problem=problem,
+            objective=objective,
+            operating_point=operating_point,
+            prop_db=prop_db,
+            spec_db=spec_db,
+            solver=solver,
+            enabled_databases=enabled_databases,
+            max_atoms=max_atoms,
+            n_refine=n_refine,
+            max_iter_stage2=max_iter_stage2,
+        )
+    else:
+        optimizer = MultiStartGradientOptimizer(
+            problem=problem,
+            objective=objective,
+            operating_point=operating_point,
+            prop_db=prop_db,
+            spec_db=spec_db,
+            solver=solver,
+            enabled_databases=enabled_databases,
+            max_atoms=max_atoms,
+        )
 
     def _progress(payload: dict) -> None:
         s = int(payload.get("start", 0)) + 1
         n = int(payload.get("n_starts", n_starts))
         best = payload.get("best_value")
         converged = payload.get("converged", False)
+        stage = payload.get("stage")
+        stage_tag = f" [stage {stage}]" if stage is not None else ""
         if best is not None:
             print(
-                f"  [start {s}/{n}] best log FoM = {best:.6f}",
+                f"  [start {s}/{n}]{stage_tag} best log FoM = {best:.6f}",
                 file=sys.stderr,
             )
         else:
             status = "converged" if converged else "failed"
-            print(f"  [start {s}/{n}] {status}", file=sys.stderr)
+            print(f"  [start {s}/{n}]{stage_tag} {status}", file=sys.stderr)
 
     print("Running...", file=sys.stderr)
     result = optimizer.optimize(
         n_starts=n_starts,
         max_iter_per_start=max_iter_per_start,
         fd_step=fd_step,
+        ftol=ftol,
         seed=seed,
         n_workers=n_workers,
         progress_callback=_progress,

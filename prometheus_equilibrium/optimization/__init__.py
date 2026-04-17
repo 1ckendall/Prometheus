@@ -8,11 +8,12 @@ from .config import (
     load_operating_point,
     load_problem,
     load_solver_settings,
+    load_staged_config,
     save_json,
 )
 from .constraints import FormulationConstraintCompiler
 from .engine import OptimizationResult
-from .gradient_engine import MultiStartGradientOptimizer
+from .gradient_engine import MultiStartGradientOptimizer, StagedGradientOptimizer
 from .problem import (
     FixedProportionGroup,
     ObjectiveSpec,
@@ -30,6 +31,7 @@ __all__ = [
     "OperatingPoint",
     "OptimizationProblem",
     "OptimizationResult",
+    "StagedGradientOptimizer",
     "SumToTotalGroup",
     "VariableBound",
     "dump_config",
@@ -39,5 +41,6 @@ __all__ = [
     "load_operating_point",
     "load_problem",
     "load_solver_settings",
+    "load_staged_config",
     "save_json",
 ]

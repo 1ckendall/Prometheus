@@ -74,11 +74,15 @@ def dump_config(
     n_starts: int,
     max_iter_per_start: int,
     fd_step: float,
+    ftol: float = 1e-4,
     n_workers: int,
     seed: int | None,
     solver_type: str,
     enabled_databases: list[str],
     max_atoms: int,
+    staged_enabled: bool = False,
+    n_refine: int = 4,
+    max_iter_stage2: int = 20,
 ) -> dict[str, Any]:
     """Serialise a complete optimizer run configuration to a plain dict.
 
@@ -98,6 +102,9 @@ def dump_config(
         solver_type: Solver key (``"gmcb"``, ``"mss"``, ``"hybrid"``).
         enabled_databases: Thermo database labels to use.
         max_atoms: Product-species atom-count filter.
+        staged_enabled: If ``True``, enable two-stage frozen→shifting mode.
+        n_refine: Number of stage-1 optima to carry into stage-2 refinement.
+        max_iter_stage2: SLSQP iterations per start in stage 2.
 
     Returns:
         JSON-serializable dict with mass fractions expressed as percentages.
@@ -157,8 +164,14 @@ def dump_config(
             "n_starts": n_starts,
             "max_iter_per_start": max_iter_per_start,
             "fd_step": fd_step,
+            "ftol": ftol,
             "n_workers": n_workers,
             "seed": seed,
+        },
+        "staged": {
+            "enabled": staged_enabled,
+            "n_refine": n_refine,
+            "max_iter_stage2": max_iter_stage2,
         },
         "solver": {
             "type": solver_type,
@@ -279,8 +292,26 @@ def load_gradient_config(
         int(r.get("n_starts", 4)),
         int(r.get("max_iter_per_start", 10)),
         float(r.get("fd_step", 1e-4)),
+        float(r.get("ftol", 1e-4)),
         int(r.get("n_workers", 0)),
         r.get("seed"),
+    )
+
+
+def load_staged_config(d: dict[str, Any]) -> tuple[bool, int, int]:
+    """Return staged-optimizer settings from a config dict.
+
+    Args:
+        d: Full config dict.
+
+    Returns:
+        Tuple ``(staged_enabled, n_refine, max_iter_stage2)``.
+    """
+    s = d.get("staged", {})
+    return (
+        bool(s.get("enabled", False)),
+        int(s.get("n_refine", 4)),
+        int(s.get("max_iter_stage2", 20)),
     )
 
 

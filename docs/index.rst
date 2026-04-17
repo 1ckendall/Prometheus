@@ -13,6 +13,7 @@ NASA CEA / RocketCEA.
 
    thermo/index
    solver_comparison
+   optimizer
    worked_example_ch4_o2
    frozen_expansion
 

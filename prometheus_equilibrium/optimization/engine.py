@@ -34,3 +34,4 @@ class OptimizationResult:
     completed_trials: int
     pruned_trials: int
     start_history_meta: dict[int, list[dict[str, object]]] = field(default_factory=dict)
+    start_compositions: dict[int, dict[str, float]] = field(default_factory=dict)
